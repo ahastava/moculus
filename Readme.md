@@ -44,3 +44,12 @@ Once everything is uploaded, you should be able to see in the serial monitor all
 
 - Open up VS code within the PYQTGUI_VIP folder. Open up GUI.py and click "Run and Debug"
 
+#### Blueotooth setup:
+
+The UNO is the only one that needs to be connected to the PC, and the other two just need power (can be connected to anything that powers them). 
+
+There are two pieces of hardware on the aggregator board with the blue cases -- each of these are the receivers for the probe and background unit, respectively). The bluetooth is paired if both transmitterand the receiver's red LED is continuously creating two "blinks" followed by a pause. However, if a device is not paired, it will continuously blink at a constant rate, or if it's not powered, there will be no light.
+
+To fix the unpaired device: sometimes even if everything is wired up correctly, the device won't pair or power up, and this can usually be fixed by just pulling the bluetooth module out of the aggregator and re-inserting it. If that doesn't work, Try disconnecting the aggregator's USB power supply from the computer and reconnecting.
+
+If there are still issues, it's possible something got disconnected, either in the aggregator or the probe/background (Whichever pair is having the issue).
