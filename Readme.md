@@ -8,11 +8,12 @@
 
 #### Install Library for Arduino
 
-// My Arduino IDE 2.3.3
-// install and use ArdurinoBLE for Arduino Nano 33 BLE library //1.3.7 installed
-#include <Arduino_LSM9DS1.h> //1.1.1 installed, old 3rd party 2.0.0 also works
-#include <MadgwickAHRS.h> //1.2.0 installed, old one is 1.2.0 also
-#include <ReefwingAHRS.h> //2.1.0 installed, old one is 2.1.0,  2.2.0 or 2.3.0 won't work
+// My Arduino IDE 2.3.3\
+// install and use ArdurinoBLE for Arduino Nano 33 BLE library //1.3.7 installed\
+#include <Arduino_LSM9DS1.h> //1.1.1 installed, old 3rd party 2.0.0 also works\
+#include <MadgwickAHRS.h> //1.2.0 installed, old one is 1.2.0 also\
+#include <ReefwingAHRS.h> //2.1.0 installed, old one is 2.1.0,  2.2.0 or 2.3.0 won't work\
+
 
 1.) Load each of the 3 .ino files into the respective Arduinos 
 
