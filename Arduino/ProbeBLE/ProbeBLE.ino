@@ -87,7 +87,8 @@ void setup() {
   imu.begin();
 
   //  Positive magnetic declination - Kings Park, NY
-  imu.setDeclination(-12.717);
+  //Stony Brook: -12.57
+  imu.setDeclination(-12.57); //-12.717  
   imu.setFusionAlgorithm(SensorFusion::MAHONY);
 
   //  Paste your calibration bias offset HERE
@@ -97,9 +98,9 @@ void setup() {
   	// imu.loadGyroBias(2.429962, 0.358887, 1.899109);
 	  // imu.loadMagBias(0.236572, 0.083618, -0.062744);
 
-	imu.loadAccBias(0.017761, 0.958679, -0.801147);
-	imu.loadGyroBias(5.166473, 0.553284, 4.329071);
-	imu.loadMagBias(0.406006, 0.110229, 0.192017);
+imu.loadAccBias(0.138428, -0.030640, -0.024963);
+	imu.loadGyroBias(4.785156, 0.859833, 4.643097);
+	imu.loadMagBias(0.081421, 0.051880, -0.313110);
     //  This sketch assumes that the LSM9DS1 is already calibrated, 
     //  If so, start processing IMU data. If not, run the testAndCalibrate 
     //  sketch first.
@@ -116,7 +117,7 @@ void loop() {
 
    angles = imu.update();
   roll = angles.roll;
-  pitch = angles.yaw;
+  pitch = angles.pitch;
   yaw = angles.yaw;
 
   // //send data through serial port
@@ -146,7 +147,7 @@ void loop() {
     {
                     angles = imu.update();
   roll = angles.roll;
-  pitch = angles.yaw;
+  pitch = angles.pitch;
   yaw = angles.yaw;
 
       // Check if it's time to send data (every displayPeriod, non-blocking)
@@ -162,14 +163,15 @@ void loop() {
           
 
           // Debugging output to Serial Monitor
-          Serial.println("Sending counter value over BLE:");
-          Serial.println(BLECounter);
+          Serial.print("Sending counter value over BLE:");
+          Serial.print("Probe counter: ");
+          Serial.print(BLECounter);
 
-          Serial.print("Probe ");
+          Serial.print(" yaw:");
           Serial.print(yaw);
-          Serial.print("_");
+          Serial.print(" pitch: ");
           Serial.print(pitch);
-          Serial.print("_");
+          Serial.print(" roll: ");
           Serial.print(roll); 
           Serial.println("YY");
           
