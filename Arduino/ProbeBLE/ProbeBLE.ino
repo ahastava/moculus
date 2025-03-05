@@ -4,7 +4,7 @@
 // install and use ArduinoBLE for Arduino Nano 33 BLE library //1.3.7 installed
 #include <Arduino_LSM9DS1.h> //1.1.1 installed, old 3rd party 2.0.0 also works
 #include <MadgwickAHRS.h> //1.2.0 installed, old one is 1.2.0 also
-#include <ReefwingAHRS.h> //2.1.0 installed, old one is 2.1.0,  2.2.0 or 2.3.0 won't work
+#include <ReefwingAHRS.h> //2.1.0 installed, old one is 2.1.0,  2.2.0 or 2.3.0 won't work => need to test and modify based on 2.3.5
 
 // BLE codes defination
 const long BLEDisplayFrenquency = 250;
