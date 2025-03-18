@@ -24,16 +24,21 @@ void setup() {
   imu.begin();
 
   //  Positive magnetic declination - Kings Park, NY
-  imu.setDeclination(-7.96);
+  imu.setDeclination(-12.46); //-12.46 Hicksville, NY
   imu.setFusionAlgorithm(SensorFusion::MAHONY);
 
     //  Paste your calibration bias offset HERE
     //  This information comes from the testAndCalibrate.ino 
     //  sketch in the library examples sub-directory.
 
-    imu.loadAccBias(-0.045776, -0.044739, -0.012573);
-  	imu.loadGyroBias(2.429962, 0.358887, 1.899109);
-	  imu.loadMagBias(0.236572, 0.083618, -0.062744);
+
+
+
+
+
+	imu.loadAccBias(0.154053, -0.015137, -0.023010);
+	imu.loadGyroBias(4.560852, 0.687866, 4.852448);
+	imu.loadMagBias(0.250732, -0.077148, -0.165771);
 
     //  This sketch assumes that the LSM9DS1 is already calibrated, 
     //  If so, start processing IMU data. If not, run the testAndCalibrate 
