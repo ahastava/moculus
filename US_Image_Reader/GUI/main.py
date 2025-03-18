@@ -91,6 +91,7 @@ class UltrasoundViewer(QMainWindow):
         self.roll = 0
         self.shift_x = 0
         self.shift_y = 0
+        self.gain = 0
 
         self.display_slice = cp.asnumpy(self.volume.rotated_gpu[:, :, self.z_index])
 
@@ -121,10 +122,11 @@ class UltrasoundViewer(QMainWindow):
 
         self.slider_z = self.add_slider('Slice Z', 0, self.volume.z_dim - 1, self.z_index, 1)
         self.slider_yaw = self.add_slider('Yaw', -180, 180, self.yaw, 1)
-        self.slider_pitch = self.add_slider('Pitch', -180, 180, self.pitch, 1)
-        self.slider_roll = self.add_slider('Roll', -180, 180, 0, 1)
+        self.slider_pitch = self.add_slider('Roll', -180, 180, self.pitch, 1)
+        self.slider_roll = self.add_slider('Pitch', -180, 180, 0, 1)
         self.slider_x = self.add_slider('Move X', -100, 100, self.shift_x, 10)
         self.slider_y = self.add_slider('Move Y', -100, 100, self.shift_y, 10)
+        self.slider_gain = self.add_slider('Gain', -50, 50, self.gain, 1)
 
         self.reset_button = QPushButton("Reset", self)
         self.reset_button.clicked.connect(self.ui_value_reset)
@@ -141,7 +143,7 @@ class UltrasoundViewer(QMainWindow):
         self.roll = 0
         self.shift_x = 0
         self.shift_y = 0
-
+        self.gain = 0
         # I don't know why this does not work individually
         # self.slider_z.setValue(self.z_index)
         # self.slider_yaw.setValue( self.yaw)
@@ -157,7 +159,7 @@ class UltrasoundViewer(QMainWindow):
         self.slider_roll.setValue(0)
         self.slider_x.setValue(0)
         self.slider_y.setValue(0)
-
+        self.slider_gain.setValue(0)
 
     def add_slider(self, name, min, max, value, step):
         slider_layout = QHBoxLayout()
@@ -250,11 +252,12 @@ class UltrasoundViewer(QMainWindow):
         self.roll = self.slider_roll.value()
         self.shift_x = self.slider_x.value()
         self.shift_y = self.slider_y.value()
+        self.gain = self.slider_gain.value()
 
         self.volume.rotate(self.yaw, self.pitch, self.roll, self.z_index, method='GPU')
 
         elapsed_time = time.time() - start_time
-        print(f"GPU rotate 1 Elapsed time: {elapsed_time:.3f} seconds")
+        #print(f"GPU rotate 1 Elapsed time: {elapsed_time:.3f} seconds")
         start_time = time.time()
 
       #  a = self.volume.rotated_gpu[:, :, self.z_index]
@@ -267,7 +270,7 @@ class UltrasoundViewer(QMainWindow):
         #self.display_slice = cp.asnumpy(self.display_slice, stream=cp.cuda.get_current_stream())
 
         elapsed_time = time.time() - start_time
-        print(f"GPU rotate 2 Elapsed time: {elapsed_time:.3f} seconds")
+        #print(f"GPU rotate 2 Elapsed time: {elapsed_time:.3f} seconds")
         start_time = time.time()
 
         #self.display_slice = cp.asnumpy(self.volume.rotated_gpu[:, :, self.z_index])
@@ -275,18 +278,25 @@ class UltrasoundViewer(QMainWindow):
         self.display_slice = self.shift_image(self.display_slice, self.shift_x, self.shift_y)
 
         elapsed_time = time.time() - start_time
-        print(f"GPU rotate 3 Elapsed time: {elapsed_time:.3f} seconds")
+        #print(f"GPU rotate 3 Elapsed time: {elapsed_time:.3f} seconds")
         start_time = time.time()
 
         moved = self.display_slice.copy()
 
         moved = moved.astype(cp.int32)
-        moved = cp.clip(moved, 0, None) #remove less than 0 value, which will create problem in division and cv2 function
-        max_val = cp.max(moved)
 
-        if max_val == 0: #to prevent divide by 0
-            max_val = 1
-        img_rgb = cv2.cvtColor((moved * 255 / max_val).astype(cp.uint8), cv2.COLOR_GRAY2RGB)
+        #print(self.gain, self.gain/100 + 1)
+        moved = cp.clip(moved * (self.gain/100.0 + 1), 0, 255).astype(cp.int32)
+
+       # moved = cp.clip(moved, 0, None) #remove less than 0 value, which will create problem in division and cv2 function
+       #  max_val = cp.max(moved)
+       #
+       #
+       #  if max_val == 0: #to prevent divide by 0
+       #      max_val = 1
+       #  img_rgb = cv2.cvtColor((moved * 255 / max_val).astype(cp.uint8), cv2.COLOR_GRAY2RGB)
+
+        img_rgb = cv2.cvtColor(moved.astype(cp.uint8), cv2.COLOR_GRAY2RGB)
 
         #double the size
         height, width = img_rgb.shape[:2]
@@ -303,7 +313,7 @@ class UltrasoundViewer(QMainWindow):
         #self.gl_widget.update()
 
         elapsed_time = time.time() - start_time
-        print(f"GPU rotate 4 Elapsed time: {elapsed_time:.3f} seconds")
+        #print(f"GPU rotate 4 Elapsed time: {elapsed_time:.3f} seconds")
 
     def increment_slider(self):
         new_value = (self.slider_roll.value() + 10) % (self.slider_roll.maximum() + 1)
