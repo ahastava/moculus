@@ -209,15 +209,15 @@ void loop() {
           // 123456,+123.45,+12.34,+12.34
           snprintf(buffer, sizeof(buffer), "%6d,%+6.2f,%+6.2f,%+6.2f", BLECounter, ypr.yaw, ypr.pitch, ypr.roll);
 
-          Serial.println(buffer);
+         // Serial.println(buffer);
 
           counterCharacteristic.writeValue( BLECounter );  
           yawCharacteristic.writeValue( ypr.yaw );
           pitchCharacteristic.writeValue( ypr.pitch );
           rollCharacteristic.writeValue( ypr.roll );
 
-     allData.writeValue(buffer);
-          delay(100);
+          allData.writeValue(buffer);
+          delay(10);
           BLECounter += 1;
           if(BLECounter > 999999)
             BLECounter = 0;
