@@ -1,3 +1,6 @@
+#! pip install cupy-cuda12x # For CUDA 12.x
+#! pip install opencv-python
+#! pip install nibabel
 import sys
 import numpy as np
 import cupy as cp
@@ -82,7 +85,7 @@ class UltrasoundViewer(QMainWindow):
     def __init__(self, volume):
         super().__init__()
         self.volume = volume
-        self.volume.scale('GPU', 0.5)
+        self.volume.scale('GPU', 0.1)
         self.volume.pad('GPU')
 
         self.z_index = 0  # show all the slices # self.volume.z_dim // 2

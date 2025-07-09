@@ -189,7 +189,8 @@ void loop() {
           }
           static long last = 0;
           long now = micros();
-          Serial.print(now - last);             Serial.print("\t");
+          //Serial.print(now - last);             Serial.print("\t");
+          Serial.print(BLECounter);             Serial.print("\t");
           last = now;
           Serial.print(sensorValue.status);     Serial.print("\t");  // This is accuracy in the range of 0 to 3
           Serial.print(ypr.yaw);                Serial.print("\t");

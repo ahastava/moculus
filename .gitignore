@@ -1,0 +1,4 @@
+.git/
+*.xml
+*.pyc
+*.iml
