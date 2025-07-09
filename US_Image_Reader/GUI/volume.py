@@ -24,6 +24,7 @@ class Volume:
     def scale(self, method='GPU', scale_factor=0.2):
         if method == 'GPU':
             self.volume_gpu = cndimage.zoom(self.volume_gpu, zoom=scale_factor, order=0)
+
             self.rotated_gpu = self.volume_gpu.copy()
             self.x_dim, self.y_dim, self.z_dim = self.volume_gpu.shape
             print('volume shape: ', self.x_dim, self.y_dim, self.z_dim)
@@ -31,18 +32,26 @@ class Volume:
             self.volume_updated = zoom(self.volume, zoom=(scale_factor, scale_factor, scale_factor), order=3)
 
     def pad(self, method='GPU'):
+
+        # stack won't help, will create bad artifacts
+        # stack_times = self.x_dim//self.z_dim
+        # if stack_times == 0:  # avoid divide by 0
+        #     stack_times = 1
+        # self.volume_gpu = cp.tile(self.volume_gpu, (1, 1, stack_times))
+        # print('stacked times:', stack_times)
+
         max_dim = max(self.volume_gpu.shape)*1.4
         pad_width = [((max_dim - s) // 2, (max_dim - s + 1) // 2) for s in self.volume_gpu.shape]
         #pad_width = [(0,0),(0,0),(1,0)]
         #pad_width = [(0, 0), (0, 0), (30, 30)]
         #pad_width = [(0, 0), (0, 0), ((max_dim - self.z_dim) // 2, (max_dim - self.z_dim) // 2)]
-        a = cp.asnumpy(self.volume_gpu[:, :,0])
+        #a = cp.asnumpy(self.volume_gpu[:, :,0])
 
         if method == 'GPU':
             pad_width_gpu = tuple((cp.int32(p[0]), cp.int32(p[1])) for p in pad_width)
 
             self.volume_gpu = cp.pad(self.volume_gpu, pad_width_gpu, mode='constant', constant_values=0)
-            a = cp.asnumpy(self.volume_gpu[:, :, 1])
+            #a = cp.asnumpy(self.volume_gpu[:, :, 1])
 
             self.rotated_gpu = self.volume_gpu.copy()
             self.x_dim, self.y_dim, self.z_dim = self.volume_gpu.shape
