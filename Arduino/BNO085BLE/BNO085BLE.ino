@@ -69,34 +69,49 @@ BLECharacteristic allData(BLE_UUID_ACCELERATION_ALL, BLERead | BLENotify, 50);
 
 //---------------------------------------------------------
 
+template <typename T>
+void myPrint(const T& msg) {
+  if (Serial) Serial.print(msg);
+}
+
+template <typename T>
+void myPrintln(const T& msg) {
+  if (Serial) Serial.println(msg);
+}
+
 
 void setup(void) {
 
   Serial.begin(115200);
-  while (!Serial) delay(10);     // will pause Zero, Leonardo, etc until serial console opens
+  
+  delay(1000);
+  //This blocks every codes afterwards, if USB is not connected!
+  //while (!Serial) delay(10);     // will pause Zero, Leonardo, etc until serial console opens
 
-  Serial.println("Adafruit BNO08x test!");
+  myPrintln("Adafruit BNO08x test!");
 
   // Try to initialize!
   if (!bno08x.begin_I2C()) {
   //if (!bno08x.begin_UART(&Serial1)) {  // Requires a device with > 300 byte UART buffer!
   //if (!bno08x.begin_SPI(BNO08X_CS, BNO08X_INT)) {
-    Serial.println("Failed to find BNO08x chip");
+    myPrintln("Failed to find BNO08x chip");
     while (1) { delay(10); }
   }
-  Serial.println("BNO08x Found!");
+  
+  myPrintln("BNO08x Found!");
 
 
   setReports(reportType, reportIntervalUs);
 
-  Serial.println("Reading events");
+  myPrintln("Reading events");
+
   delay(100);
   
   // -----------BLE part ----------- -----------
 
     // Start BLE
   if (!BLE.begin()) {
-    Serial.println("Starting BLE failed!");
+    myPrintln("Starting BLE failed!");
     while (1);
   }
 
@@ -126,10 +141,13 @@ void setup(void) {
   // Start advertising
   BLE.advertise();
   
-  Serial.println("BLE address:");
-  Serial.println(BLE.address());  //  prints MAC as string
 
-  Serial.println("BLE Device is ready to pair");
+  myPrintln("BLE address:");
+  myPrintln(BLE.address());  //  prints MAC as string
+
+  myPrintln("BLE Device is ready to pair");
+  
+
  // ---------------------- -----------
 }
 
@@ -166,14 +184,17 @@ void loop() {
 
   if ( central )
   {
-    Serial.print( "Connected to central: " );
-    Serial.println( central.address() );
+
+    myPrint( "Connected to central: " );
+    myPrintln( central.address() );
+    
+
 
     while ( central.connected() )
     {
 
         if (bno08x.wasReset()) {
-          Serial.print("sensor was reset ");
+          myPrintln("sensor was reset ");
           setReports(reportType, reportIntervalUs);
         }
         
@@ -192,10 +213,10 @@ void loop() {
           //Serial.print(now - last);             Serial.print("\t");
           Serial.print(BLECounter);             Serial.print("\t");
           last = now;
-          Serial.print(sensorValue.status);     Serial.print("\t");  // This is accuracy in the range of 0 to 3
-          Serial.print(ypr.yaw);                Serial.print("\t");
-          Serial.print(ypr.pitch);              Serial.print("\t");
-          Serial.println(ypr.roll);
+          myPrint(sensorValue.status);     Serial.print("\t");  // This is accuracy in the range of 0 to 3
+          myPrint(ypr.yaw);                Serial.print("\t");
+          myPrint(ypr.pitch);              Serial.print("\t");
+          myPrintln(ypr.roll);
 
 
           // Serial.print(sensorValue.un.arvrStabilizedRV.real);  Serial.print("\t");
