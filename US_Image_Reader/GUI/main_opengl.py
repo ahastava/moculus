@@ -17,6 +17,8 @@ import mysql_interface
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
+from stl import mesh #pip install numpy-stl
+
 class ArrowGLWidget(QOpenGLWidget):
     def initializeGL(self):
         glClearColor(0.1, 0.1, 0.1, 1.0)
@@ -30,7 +32,46 @@ class ArrowGLWidget(QOpenGLWidget):
         self.shift_y = 0
 
         try:
+            self.probe_mesh = mesh.Mesh.from_file('../data/probe_shell_500_faces.stl')
+
+            # Get all vertices as Nx3 array
+            all_verts = self.probe_mesh.vectors.reshape(-1, 3)
+
+            # --- Step 1: shift Z so bottom at 0 ---
+            min_z = np.min(all_verts[:, 2])
+            self.probe_mesh.vectors[:, :, 2] -= min_z
+
+            # --- Step 2: flip upside down along Z ---
+            self.probe_mesh.vectors[:, :, 2] *= -1
+
+            # --- Step 3: re-shift bottom to z=0 again (after flip) ---
+            all_verts = self.probe_mesh.vectors.reshape(-1, 3)
+            min_z = np.min(all_verts[:, 2])
+            self.probe_mesh.vectors[:, :, 2] -= min_z
+
+            # --- Step 4: center XY around origin ---
+            all_verts = self.probe_mesh.vectors.reshape(-1, 3)
+            mean_x = 0.5 * (np.min(all_verts[:, 0]) + np.max(all_verts[:, 0]))
+            mean_y = 0.5 * (np.min(all_verts[:, 1]) + np.max(all_verts[:, 1]))
+
+            self.probe_mesh.vectors[:, :, 0] -= mean_x
+            self.probe_mesh.vectors[:, :, 1] -= mean_y
+
+            # --- Rotate 90° clockwise in XY plane ---
+            x = self.probe_mesh.vectors[:, :, 0].copy()
+            y = self.probe_mesh.vectors[:, :, 1].copy()
+
+            self.probe_mesh.vectors[:, :, 0] = y  # new X = old Y
+            self.probe_mesh.vectors[:, :, 1] = -x  # new Y = -old X
+
             self.background_texture = self.load_texture("../data/test1.jpg")
+
+            # run once, the result is 163.04587
+            # all_verts = self.probe_mesh.vectors.reshape(-1, 3)
+            # self.probe_mesh.min_z = np.min(all_verts[:, 2])
+            # max_z = np.max(all_verts[:, 2])
+            # height = max_z - self.probe_mesh.min_z
+            # print("height: ", height)
         except Exception as e:
             print(e)
 
@@ -89,8 +130,36 @@ class ArrowGLWidget(QOpenGLWidget):
         glTranslatef(0, 0, length)
         gluCylinder(quad, 0.1, 0.0, 0.3, 20, 1)
         gluDeleteQuadric(quad)
-        print("axis\n")
+        #print("axis\n")
         glPopMatrix()
+
+    def paintProbeSimple(self):
+
+        # draw simple probe model
+        glPushMatrix()
+
+        # Apply rotations (order: yaw → pitch → roll)
+        glTranslatef(self.shift_x, self.shift_y, 0)
+        glRotatef(self.roll, 0, 1, 0)  # Yaw (around Y)
+        glRotatef(self.pitch, 1, 0, 0)  # Pitch (around X)
+        glRotatef(self.yaw, 0, 0, 1)  # Roll (around Z)
+
+        # Draw shaft
+        glColor4f(0.0, 1.0, 0.0, 0.5)
+        shaft = gluNewQuadric()
+        gluCylinder(shaft, 0.2, 0.2, 2, 20, 1)
+        gluDeleteQuadric(shaft)
+
+        # Draw head at the tip
+        glRotatef(90, 0, 1, 0)
+        glTranslatef(-0.0, 0, -0.75)
+        glColor4f(1.0, 0.0, 0.0, 0.5)
+        head = gluNewQuadric()
+        gluCylinder(head, 0.3, 0.3, 1.5, 20, 1)
+        gluDeleteQuadric(head)
+
+        glPopMatrix()
+
 
     def paintGL(self):
 
@@ -156,34 +225,34 @@ class ArrowGLWidget(QOpenGLWidget):
         self.draw_axis_arrow('y', 2.0, (0, 1, 0))  # Green Y
         self.draw_axis_arrow('z', 2.0, (0, 0, 1))  # Blue Z
 
+        #self.paintProbeSimple()
+
+        ###
         glPushMatrix()
 
-        # Apply rotations (order: yaw → pitch → roll)
-        glTranslatef(self.shift_x, self.shift_y, 0)
+        # Apply probe transformations (order: yaw → pitch → roll)
+        #glTranslatef(self.shift_x, self.shift_y, 0)
         glRotatef(self.roll, 0, 1, 0)  # Yaw (around Y)
         glRotatef(self.pitch, 1, 0, 0)  # Pitch (around X)
         glRotatef(self.yaw, 0, 0, 1)  # Roll (around Z)
 
+        #glRotatef(180, 1, 0, 0) # model is upside on in z axis
+        glScalef(0.01, 0.01, 0.01)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glColor4f(1.0, 0.5, 0.2, 0.7)  # Semi-transparent orange
 
-        # Draw shaft
-        glColor4f(0.0, 1.0, 0.0, 0.5)
-        shaft = gluNewQuadric()
-        gluCylinder(shaft, 0.2, 0.2, 2, 20, 1)
-        gluDeleteQuadric(shaft)
-
-        # Draw head at the tip
-        glRotatef(90, 0, 1, 0)
-        glTranslatef(-0.0, 0, -0.75)
-        glColor4f(1.0, 0.0, 0.0, 0.5)
-        head = gluNewQuadric()
-        gluCylinder(head, 0.3, 0.3, 1.5, 20, 1)
-        gluDeleteQuadric(head)
+        # Draw STL triangles
+        glBegin(GL_TRIANGLES)
+        for i in range(len(self.probe_mesh.vectors)):
+            normal = self.probe_mesh.normals[i]
+            glNormal3f(*normal)
+            for vertex in self.probe_mesh.vectors[i]:
+                glVertex3f(*vertex)
+        glEnd()
 
         glPopMatrix()
-
-
-
-
+        ###
 
 
 class ClickableSlider(QSlider):
@@ -287,7 +356,7 @@ class UltrasoundViewer(QMainWindow):
 
         self.db_timer = QTimer(self)
         self.db_timer.timeout.connect(self.fetch_orientation_from_db)
-        self.db_timer.start(100)  # in milliseconds, e.g., 100 ms = 10 Hz
+        self.db_timer.start(50)  # in milliseconds, e.g., 100 ms = 10 Hz
 
 
 
@@ -299,14 +368,14 @@ class UltrasoundViewer(QMainWindow):
         if len(result) == 1:
             print(result[0])
 
-            self.yaw = result[0]['yaw']
-            self.pitch = result[0]['pitch']
-            self.roll = -result[0]['roll']
+            self.yaw = (result[0]['yaw'] - 90 + 180) % 360 - 180 # apply -90 offset in cewit
+            self.pitch = -result[0]['pitch']
+            self.roll = result[0]['roll']
 
             #new_value = (self.slider_roll.value() + 10) % (self.slider_roll.maximum() + 1)
-            self.slider_yaw.setValue(int(result[0]['yaw']))
-            self.slider_pitch.setValue(int(result[0]['pitch']))
-            self.slider_roll.setValue(int(-result[0]['roll']))
+            self.slider_yaw.setValue(int(self.yaw))
+            self.slider_pitch.setValue(int(self.pitch))
+            self.slider_roll.setValue(int(self.roll))
 
 
             self.gl_widget.update()

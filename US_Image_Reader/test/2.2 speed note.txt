@@ -1,0 +1,21 @@
+# patient0006_4CH_half_sequence.nii
+# (669, 552, 19)
+
+CPU scale Elapsed time: 0.641 seconds
+CPU pad Elapsed time: 0.705 seconds
+
+CPU to GPU Elapsed time: 0.261 seconds
+GPU scale Elapsed time: 0.391 seconds
+GPU pad Elapsed time: 0.106 seconds
+GPU to CPU Elapsed time: 1.527 seconds
+
+CPU Rotation Elapsed time: 1.217 seconds
+
+CPU to GPU Elapsed time: 0.221 seconds
+GPU Rotation Elapsed time 0: 0.158 seconds
+GPU Rotation Elapsed time 1: 0.032 seconds
+GPU Rotation Elapsed time 2: 0.099 seconds
+GPU Rotation Elapsed time 3: 0.091 seconds
+GPU Rotation Elapsed time 4: 0.090 seconds
+
+GPU to CPU Elapsed time: 0.105 seconds
