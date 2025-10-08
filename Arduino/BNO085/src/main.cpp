@@ -57,12 +57,11 @@ float lastAccelX = 0;
 float lastAccelY = 0;
 float lastAccelZ = 0;
 
-unsigned long lastTime_loopCount = 0;
-unsigned long loopCount = 0;
+int lastTime_loopCount = 0;
+int loopCount = 0;
 
-unsigned long loopCount_reportType = 0;
+int loopCount_reportType = 0;
 
-bool print_out = true;
 
 void setup(void) {
 
