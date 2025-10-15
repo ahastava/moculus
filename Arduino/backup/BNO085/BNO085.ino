@@ -123,10 +123,10 @@ void loop() {
     Serial.println(ypr.roll);
 
 
-    Serial.print(sensorValue.un.arvrStabilizedRV.real);  Serial.print("\t");
-    Serial.print(sensorValue.un.arvrStabilizedRV.i);     Serial.print("\t");
-    Serial.print(sensorValue.un.arvrStabilizedRV.j);     Serial.print("\t");
-    Serial.println(sensorValue.un.arvrStabilizedRV.k);   
+    // Serial.print(sensorValue.un.arvrStabilizedRV.real);  Serial.print("\t");
+    // Serial.print(sensorValue.un.arvrStabilizedRV.i);     Serial.print("\t");
+    // Serial.print(sensorValue.un.arvrStabilizedRV.j);     Serial.print("\t");
+    // Serial.println(sensorValue.un.arvrStabilizedRV.k);   
 
     delay(200);
   }

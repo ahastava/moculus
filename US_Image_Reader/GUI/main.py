@@ -85,7 +85,7 @@ class UltrasoundViewer(QMainWindow):
     def __init__(self, volume):
         super().__init__()
         self.volume = volume
-        self.volume.scale('GPU', 0.1)
+        self.volume.scale('GPU', 0.25)
         self.volume.pad('GPU')
 
         self.z_index = 0  # show all the slices # self.volume.z_dim // 2

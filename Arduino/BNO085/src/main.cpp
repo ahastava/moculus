@@ -39,7 +39,13 @@ sh2_SensorValue_t sensorValue;
   long reportIntervalUs = 5000;
 #endif
 
-long accelReportIntervalUs = 5000;  //5000 us = 5ms  => 200 Hz
+//When both reports are set to the same interval (5000 µs), they try to be read at the same time, causing:
+//Polling conflicts /  I2C bottleneck / Buffer/scheduling issues - the
+//slowing the report frequency from 200 to 50 every second
+//by decrease it not much to 8250, we can get 110 report every second
+//by decrease it around 18250, we can get ~190 report back again, but this high refresh frequency that is not needed
+
+long accelReportIntervalUs = 8250;  //5000 us = 5ms  => 200 Hz
 
 void setReports(sh2_SensorId_t reportType, long report_interval) {
   Serial.println("Setting desired reports");
@@ -60,8 +66,9 @@ float lastAccelZ = 0;
 int lastTime_loopCount = 0;
 int loopCount = 0;
 
-int loopCount_reportType = 0;
-
+int angleReportLoopCount = 0;
+int BLECounter = 0;
+int reportSecond = 0;
 
 void setup(void) {
 
@@ -142,10 +149,11 @@ void loop() {
     Serial.print(loopCount);
 
     Serial.print(" reportType per second: ");
-    Serial.println(loopCount_reportType);
+    Serial.println(angleReportLoopCount);
 
     loopCount = 0;          // reset counter
-    loopCount_reportType = 0;
+    angleReportLoopCount = 0;
+    reportSecond += 1;
     lastTime_loopCount = now;         // reset timer
   }
   
@@ -200,17 +208,34 @@ void loop() {
 
         // Serial.println("SH2_ARVR_STABILIZED_RV");
 
-        loopCount_reportType += 1;
+        angleReportLoopCount += 1;
   
-             static int printCounter = 0;
-       if (++printCounter >= 5) {  // Only print every 2nd 4th sample (every 20ms)
-         printCounter = 0;
+       
+       if (angleReportLoopCount % 3 == 0) {  // Only print every 3rd sample (so we have ~10 data points in 1 second)
+    
              char buffer[128];
           
-            snprintf(buffer, sizeof(buffer), "%d\t%d\t%.2f\t%.2f\t%.2f\tX=%.2f Y=%.2f Z=%.2f",
-                    loopCount_reportType, sensorValue.status, 
-                    ypr.yaw, ypr.pitch, ypr.roll,
-                    lastAccelX, lastAccelY, lastAccelZ); // this is 500 us => 0.5ms 
+              BLECounter++;
+              float qr = sensorValue.un.arvrStabilizedRV.real;
+              float qi = sensorValue.un.arvrStabilizedRV.i;
+              float qj = sensorValue.un.arvrStabilizedRV.j;
+              float qk = sensorValue.un.arvrStabilizedRV.k;
+          
+              snprintf(buffer, sizeof(buffer),
+                  "%6d,%6d,%6d,%6d,"       // BLECounter, reportCount, calibration status
+                  "YPR=%+6.2f,%+6.2f,%+6.2f,"  // yaw, pitch, roll (deg)
+                  "Q=%+6.3f,%+6.3f,%+6.3f,%+6.3f," // quaternion (real,i,j,k)
+                  "A=%+6.2f,%+6.2f,%+6.2f",    // accelerometer X,Y,Z
+                  BLECounter,
+                  reportSecond,
+                  angleReportLoopCount,
+                  sensorValue.status,
+                  ypr.yaw, ypr.pitch, ypr.roll,
+                  qr, qi, qj, qk,
+                  lastAccelX, lastAccelY, lastAccelZ
+                ); // this is 500 us => 0.5ms 
+                  
+        
 
             Serial.println(buffer);     // this is 300 us=>0.3 ms | snprintf + serial.print => total take 800 us => 0.8ms => much faster than the 7x serial print 3.7 ms
          // this is 300 us=>0.3 ms | snprintf + serial.print => total take 800 us => 0.8ms => much faster than the 7x serial print 3.7 ms

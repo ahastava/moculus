@@ -19,7 +19,10 @@ DB_CONFIG = {
 }
 
 # BLE configuration
-DEVICE_ADDRESS = "56:94:F5:36:EC:7E"
+# test  BB:13:4D:D8:C7:42
+# probe 56:94:F5:36:EC:7E
+# box 1 B5:78:F1:65:DA:E9
+DEVICE_ADDRESS = "B5:78:F1:65:DA:E9"  # B5:78:F1:65:DA:E9
 CHARACTERISTIC_UUID_1 = "00000000-0000-0000-0000-0000001234DD"
 
 
@@ -56,29 +59,62 @@ class UltraFastDatabaseManager:
             await self.pool.wait_closed()
             logging.info("Database manager closed")
 
-    async def update_current(self, counter, roll, pitch, yaw, timestamp):
-        """Fast update of current record only"""
+    async def update_current(self, data_dict, timestamp):
+        """Fast update of current record with all fields"""
         try:
             async with self.pool.acquire() as conn:
                 async with conn.cursor() as cursor:
                     await cursor.execute(
                         '''UPDATE probe_imu SET
-                           counter = %s, roll = %s, pitch = %s, yaw = %s, updated_at = %s
+                           ble_counter = %s,
+                           report_second = %s,
+                           angle_report_loop_count = %s,
+                           transferred_loop_count = %s,
+                           status = %s,
+                           roll = %s,
+                           pitch = %s,
+                           yaw = %s,
+                           quat_r = %s,
+                           quat_i = %s,
+                           quat_j = %s,
+                           quat_k = %s,
+                           accel_x = %s,
+                           accel_y = %s,
+                           accel_z = %s,
+                           updated_at = %s
                            WHERE idx = 1''',
-                        (counter, roll, pitch, yaw, timestamp)
+                        (
+                            data_dict['ble_counter'],
+                            data_dict['report_second'],
+                            data_dict['angle_report_loop_count'],
+                            data_dict['transferred_loop_count'],
+                            data_dict['status'],
+                            data_dict['roll'],
+                            data_dict['pitch'],
+                            data_dict['yaw'],
+                            data_dict['quat_r'],
+                            data_dict['quat_i'],
+                            data_dict['quat_j'],
+                            data_dict['quat_k'],
+                            data_dict['accel_x'],
+                            data_dict['accel_y'],
+                            data_dict['accel_z'],
+                            timestamp
+                        )
                     )
         except Exception as e:
             logging.error(f"Failed to update current record: {e}")
 
-    def add_to_history_queue(self, counter, roll, pitch, yaw, timestamp):
+    def add_to_history_queue(self, data_dict, timestamp):
         """Add to history queue (non-blocking)"""
+        data_dict['timestamp'] = timestamp
         try:
-            self.history_queue.put_nowait((counter, roll, pitch, yaw, timestamp))
+            self.history_queue.put_nowait(data_dict)
         except queue.Full:
             logging.warning("History queue full, dropping oldest record")
             try:
                 self.history_queue.get_nowait()  # Remove oldest
-                self.history_queue.put_nowait((counter, roll, pitch, yaw, timestamp))
+                self.history_queue.put_nowait(data_dict)
             except queue.Empty:
                 pass
 
@@ -111,24 +147,14 @@ class UltraFastDatabaseManager:
                     current_time = time.time()
                     if (len(batch) >= 20 or
                             current_time - last_insert >= 2.0):
-                        cursor.executemany(
-                            '''INSERT INTO probe_imu_history(counter, roll, pitch, yaw, updated_at)
-                               VALUES(%s, %s, %s, %s, %s)''',
-                            batch
-                        )
-                        logging.debug(f"Inserted {len(batch)} history records")
+                        self._insert_batch(cursor, batch)
                         batch.clear()
                         last_insert = current_time
 
                 except queue.Empty:
                     # Timeout - insert any pending batch
                     if batch:
-                        cursor.executemany(
-                            '''INSERT INTO probe_imu_history(counter, roll, pitch, yaw, updated_at)
-                               VALUES(%s, %s, %s, %s, %s)''',
-                            batch
-                        )
-                        logging.debug(f"Inserted final {len(batch)} history records")
+                        self._insert_batch(cursor, batch)
                         batch.clear()
                         last_insert = time.time()
                     continue
@@ -139,6 +165,39 @@ class UltraFastDatabaseManager:
             if conn:
                 conn.close()
 
+    def _insert_batch(self, cursor, batch):
+        """Insert batch of history records"""
+        values = [
+            (
+                data['ble_counter'],
+                data['report_second'],
+                data['angle_report_loop_count'],
+                data['transferred_loop_count'],
+                data['status'],
+                data['roll'],
+                data['pitch'],
+                data['yaw'],
+                data['quat_r'],
+                data['quat_i'],
+                data['quat_j'],
+                data['quat_k'],
+                data['accel_x'],
+                data['accel_y'],
+                data['accel_z'],
+                data['timestamp']
+            )
+            for data in batch
+        ]
+        cursor.executemany(
+            '''INSERT INTO probe_imu_history
+               (ble_counter, report_second, angle_report_loop_count, transferred_loop_count,
+                status, roll, pitch, yaw, quat_r, quat_i, quat_j, quat_k,
+                accel_x, accel_y, accel_z, updated_at)
+               VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+            values
+        )
+        logging.debug(f"Inserted {len(batch)} history records")
+
 
 # Global database manager
 db_manager = None
@@ -147,25 +206,68 @@ db_manager = None
 def notification_handler_1(sender, data):
     """Ultra-fast notification handler"""
     try:
-        text = data.decode('utf-8')
-        parts = text.split(',')
+        text = data.decode('utf-8').strip()
+        parts = [p.strip() for p in text.split(',')]
+        print(parts)
 
-        counter = int(parts[0])
-        yaw = float(parts[1])
-        pitch = float(parts[2])
-        roll = float(parts[3])
-        timestamp = datetime.now()
+        if len(parts) >= 15:
 
-        print(f"Data: counter {counter}, yaw {yaw:.2f}, pitch {pitch:.2f}, roll {roll:.2f}")
+            BLECounter = int(parts[0])
+            reportSecond = int(parts[1])
+            angleReportLoopCount = int(parts[2])
+            transferredLoopCount = int(parts[3])
+            status = int(parts[4])
 
-        if db_manager:
-            # Fast async update of current record
-            asyncio.create_task(
-                db_manager.update_current(counter, roll, pitch, yaw, timestamp)
+            yaw = float(parts[5].replace("YPR=", ""))
+            pitch = float(parts[6])
+            roll = float(parts[7])
+
+            quat_r = float(parts[8].replace("Q=", ""))
+            quat_i = float(parts[9])
+            quat_j = float(parts[10])
+            quat_k = float(parts[11])
+
+            accel_x = float(parts[12].replace("A=", ""))
+            accel_y = float(parts[13])
+            accel_z = float(parts[14])
+
+            # Parse all fields
+            data_dict = {
+                'ble_counter': BLECounter,
+                'report_second': reportSecond,
+                'angle_report_loop_count': angleReportLoopCount,
+                'transferred_loop_count': transferredLoopCount,
+                'status': status,
+                'yaw': yaw,
+                'pitch': pitch,
+                'roll': roll,
+                'quat_r': quat_r,
+                'quat_i': quat_i,
+                'quat_j': quat_j,
+                'quat_k': quat_k,
+                'accel_x': accel_x,
+                'accel_y': accel_y,
+                'accel_z': accel_z
+            }
+
+            timestamp = datetime.now()
+
+            print(
+                f"loop={BLECounter}, {reportSecond}, {angleReportLoopCount}, {transferredLoopCount} "
+                f"status={status}, "
+                f"YPR=({yaw:.2f}, {pitch:.2f}, {roll:.2f}), "
+                f"Quat=({quat_r:.3f}, {quat_i:.3f}, {quat_j:.3f}, {quat_k:.3f}), "
+                f"Accel=({accel_x:.2f}, {accel_y:.2f}, {accel_z:.2f})"
             )
 
-            # Queue for background history insert
-            db_manager.add_to_history_queue(counter, roll, pitch, yaw, timestamp)
+            if db_manager:
+                # Fast async update of current record
+                asyncio.create_task(
+                    db_manager.update_current(data_dict, timestamp)
+                )
+
+                # Queue for background history insert
+                db_manager.add_to_history_queue(data_dict, timestamp)
 
     except Exception as e:
         logging.error(f"Notification error: {e}")
