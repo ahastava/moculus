@@ -107,10 +107,11 @@ void setReports(sh2_SensorId_t reportType, long report_interval)
     myPrintln("Could not enable stabilized remote vector");
   }
 
-  if (!bno08x.enableReport(SH2_ACCELEROMETER, accelReportIntervalUs))
-  {
-    myPrintln("Could not enable accelerometer report");
-  }
+  // we don't need the accelerator data
+  // if (!bno08x.enableReport(SH2_ACCELEROMETER, accelReportIntervalUs))
+  // {
+  //   myPrintln("Could not enable accelerometer report");
+  // }
 }
 
 //------------------- BLE part-------------------
@@ -126,9 +127,9 @@ BLECharacteristic allData(BLE_UUID_ACCELERATION_ALL, BLERead | BLENotify, 150);
 
 
 // Global to store last accelerometer reading
-float lastAccelX = 0;
-float lastAccelY = 0;
-float lastAccelZ = 0;
+// float lastAccelX = 0;
+// float lastAccelY = 0;
+// float lastAccelZ = 0;
 
 int lastTime_loopCount = 0;
 int loopCount = 0;
@@ -270,9 +271,6 @@ void loop()
   }
   else if (centralDevice && centralDevice.connected())
   {
-
-    // myPrintln("central");
-
     //   myPrintln("central.connected");
     if (bno08x.wasReset())
     {
@@ -294,9 +292,9 @@ void loop()
       {
       case SH2_ACCELEROMETER:
         // Update global accelerometer values
-        lastAccelX = sensorValue.un.accelerometer.x;
-        lastAccelY = sensorValue.un.accelerometer.y;
-        lastAccelZ = sensorValue.un.accelerometer.z;
+        // lastAccelX = sensorValue.un.accelerometer.x;
+        // lastAccelY = sensorValue.un.accelerometer.y;
+        // lastAccelZ = sensorValue.un.accelerometer.z;
 
         break;
 
@@ -305,7 +303,7 @@ void loop()
 
         angleReportLoopCount += 1;
 
-        if (angleReportLoopCount %3 == 0) // Only print every 3nd sample 
+        if (angleReportLoopCount % 7 == 0) //Change the number (e.g. 3) to get ~-10 reports every second
         { 
           
           char buffer[128];
@@ -318,16 +316,16 @@ void loop()
           snprintf(buffer, sizeof(buffer),
               "%6d,%6d,%6d,%6d,%6d,"       // BLECounter, reportSecond, angleReportLoopCount, transferredLoopCount,calibration status
               "YPR=%+6.2f,%+6.2f,%+6.2f,"  // yaw, pitch, roll (deg)
-              "Q=%+6.3f,%+6.3f,%+6.3f,%+6.3f," // quaternion (real,i,j,k)
-              "A=%+6.2f,%+6.2f,%+6.2f",    // accelerometer X,Y,Z
+              "Q=%+6.3f,%+6.3f,%+6.3f,%+6.3f", // quaternion (real,i,j,k)
+           //   "A=%+6.2f,%+6.2f,%+6.2f",    // accelerometer X,Y,Z
               BLECounter,
               reportSecond,
               angleReportLoopCount,
               transferredLoopCount,
               sensorValue.status,
               ypr.yaw, ypr.pitch, ypr.roll,
-              qr, qi, qj, qk,
-              lastAccelX, lastAccelY, lastAccelZ
+              qr, qi, qj, qk
+             // lastAccelX, lastAccelY, lastAccelZ
           ); // this is 500 us => 0.5ms 
 
 
