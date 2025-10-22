@@ -2,3 +2,5 @@
 *.xml
 *.pyc
 *.iml
+./ReciverBLE/config.py
+./US_Image_Reader/GUI/config.py
