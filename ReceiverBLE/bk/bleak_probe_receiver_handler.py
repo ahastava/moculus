@@ -5,7 +5,7 @@ from datetime import datetime
 import mysql_interface
 
 # Replace with your BLE device address and characteristic UUID
-DEVICE_ADDRESS = "56:94:F5:36:EC:7E" #"82:EC:2D:57:38:16"
+DEVICE_ADDRESS = "BB:13:4D:D8:C7:42" #"82:EC:2D:57:38:16"
 CHARACTERISTIC_UUID = "00000000-0000-0000-0000-000000123400"
 CHARACTERISTIC_UUID_1 = "00000000-0000-0000-0000-0000001234DD"
 

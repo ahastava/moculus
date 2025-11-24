@@ -20,7 +20,7 @@ async def main():
     mysql_interface.db_insert(None, 'TRUNCATE TABLE probe_imu_history', [])
 
     device = await BleakScanner.find_device_by_address(
-        '82:EC:2D:57:38:16'
+        'BB:13:4D:D8:C7:42'
     )
     if device is None:
         print("could not find device with address ")
