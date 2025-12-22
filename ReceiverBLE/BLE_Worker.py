@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from bk import dual_imu_handler
-from bleak import BleakClient
+from bleak import BleakClient, BleakScanner
 from PyQt6.QtCore import pyqtSignal, QThread
 from datetime import datetime
 
@@ -25,7 +25,8 @@ class BLEWorkerThread(QThread):
         self.loop = None
         self.client = None
         self.is_connected = False
-
+        self.connection_attempts = 0
+        self.max_connection_attempts = 3  # Max attempts before giving up
 
     def run(self):
         """Run the asyncio event loop in this thread"""
@@ -45,10 +46,21 @@ class BLEWorkerThread(QThread):
     def request_connect(self):
         """Request connection to BLE device"""
         self.should_connect = True
+        self.connection_attempts = 0  # Reset attempts on new connection request
 
     def request_disconnect(self):
         """Request disconnection from BLE device"""
         self.should_connect = False
+
+    async def check_bluetooth_available(self):
+        """Check if Bluetooth adapter is available"""
+        try:
+            # Try to discover devices briefly to test if BT is working
+            devices = await BleakScanner.discover(timeout=2.0)
+            return True
+        except Exception as e:
+            logging.error(f"Bluetooth check failed: {e}")
+            return False
 
     def notification_handler(self, sender, data):
         """Handler for BLE notifications - modified to emit Qt signals"""
@@ -95,7 +107,6 @@ class BLEWorkerThread(QThread):
                     f"YPR=({yaw:.2f}, {pitch:.2f}, {roll:.2f}), "
                     f"Quat=({quat_r:.3f}, {quat_i:.3f}, {quat_j:.3f}, {quat_k:.3f})"
                 )
-
 
                 # Emit signal to update GUI (thread-safe)
                 self.imu_data_signal.emit(float(roll), float(pitch), float(yaw))
@@ -149,7 +160,37 @@ class BLEWorkerThread(QThread):
     async def connect_to_device(self):
         """Connect to the BLE device"""
         try:
-            self.ble_status_signal.emit("Connecting...", "orange")
+            self.connection_attempts += 1
+
+            # Check if we've exceeded max attempts
+            if self.connection_attempts > self.max_connection_attempts:
+                self.ble_status_signal.emit(
+                    "Connection failed: Max attempts reached. Check Bluetooth adapter.",
+                    "red"
+                )
+                self.should_connect = False  # Stop trying to connect
+                self.connection_state_signal.emit(False)
+                self.is_connected = False
+                return
+
+            self.ble_status_signal.emit(
+                f"Connecting... (Attempt {self.connection_attempts}/{self.max_connection_attempts})",
+                "orange"
+            )
+
+            # First check if Bluetooth is available
+            if self.connection_attempts == 1:  # Only check on first attempt
+                bt_available = await self.check_bluetooth_available()
+                if not bt_available:
+                    self.ble_status_signal.emit(
+                        "Bluetooth adapter not found. Please plug it in and try again.",
+                        "red"
+                    )
+                    self.should_connect = False  # Stop trying
+                    self.connection_state_signal.emit(False)
+                    self.is_connected = False
+                    return
+
             self.client = BleakClient(self.device_address)
             await self.client.connect()
 
@@ -159,6 +200,8 @@ class BLEWorkerThread(QThread):
                 self.is_connected = False
                 return
 
+            # Success! Reset attempts counter
+            self.connection_attempts = 0
             self.is_connected = True
             self.ble_status_signal.emit("Connected", "green")
             self.connection_state_signal.emit(True)
@@ -168,10 +211,21 @@ class BLEWorkerThread(QThread):
                 self.notification_handler
             )
         except Exception as e:
-            self.ble_status_signal.emit(f"Connection failed: {str(e)}", "red")
+            error_msg = str(e)
+
+            # Check for specific Bluetooth adapter errors
+            if "Failed to start scanner" in error_msg or "Bluetooth" in error_msg:
+                self.ble_status_signal.emit(
+                    f"Bluetooth adapter error. Please check if adapter is plugged in.",
+                    "red"
+                )
+                self.should_connect = False  # Stop trying on adapter errors
+            else:
+                self.ble_status_signal.emit(f"Connection failed: {error_msg}", "red")
+
             self.connection_state_signal.emit(False)
             self.is_connected = False
-            logging.error(f"Failed to connect: {e}")
+            logging.error(f"Failed to connect (attempt {self.connection_attempts}): {e}")
 
     async def disconnect_from_device(self):
         """Disconnect from the BLE device"""
@@ -185,6 +239,7 @@ class BLEWorkerThread(QThread):
 
             self.is_connected = False
             self.client = None
+            self.connection_attempts = 0  # Reset attempts on disconnect
             self.ble_status_signal.emit("Disconnected", "red")
             self.connection_state_signal.emit(False)
         except Exception as e:

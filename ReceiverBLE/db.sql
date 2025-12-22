@@ -97,3 +97,29 @@ CREATE TABLE car_imu_history (
 SET SQL_SAFE_UPDATES = 0;
 DELETE FROM car_imu_history;
 SET SQL_SAFE_UPDATES = 1;
+
+
+drop table pressure_mat;
+
+CREATE TABLE pressure_mat (
+    idx INT NOT NULL AUTO_INCREMENT,
+    ble_counter INT,
+    x INT,
+    y int,
+    max_value int,
+    updated_at DATETIME(3),
+    PRIMARY KEY (idx)
+);
+
+
+drop table pressure_mat;
+
+CREATE TABLE pressure_mat_history (
+    idx INT NOT NULL AUTO_INCREMENT,
+    ble_counter INT,
+    x INT,
+    y int,
+    max_value int,
+    updated_at DATETIME(3),
+    PRIMARY KEY (idx)
+);
