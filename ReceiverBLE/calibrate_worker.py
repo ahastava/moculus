@@ -1,24 +1,12 @@
 import pymysql  # Use pymysql instead of mysql.connector
 import config
 import copy
-from dataclasses import dataclass
 from PyQt6.QtCore import QThread, pyqtSignal
-from datetime import datetime
 import time
 import traceback
 import logging
 from IMUState import IMUState
-
-# @dataclass
-# class IMU:
-#     yaw: float = 0.0
-#     pitch: float = 0.0
-#     roll: float = 0.0
-#     quat_r: float = 0.0
-#     quat_i: float = 0.0
-#     quat_j: float = 0.0
-#     quat_k: float = 0.0
-
+from datetime import datetime
 
 class CalibrateWorker(QThread):
     """Worker thread for calibration operations with database access"""
@@ -266,7 +254,7 @@ class CalibrateWorker(QThread):
         self.probe_imu_calibrated_1 = copy.deepcopy(self.probe_imu_0)
         self.probe_imu_calibrated_2 = copy.deepcopy(self.probe_imu_0)
 
-    def _update_current_data(self):
+    def _read_current_data(self):
         """Update current frame data from new readings"""
         # Store previous values
         self.car_imu_prev = copy.deepcopy(self.car_imu_current)
@@ -317,6 +305,24 @@ class CalibrateWorker(QThread):
                 data[0]['quat_k']
             )
             logging.info(f"Car current: {data}")
+
+    def _write_calibrated_result(self, imu: IMUState, imu2: IMUState):
+        #Write calibrated IMU (per method) into calibrated_imu table.
+
+        try:
+            sql = f"""Update calibrated_imu set
+                    roll = %s,
+                    pitch = %s,
+                    yaw = %s,
+                    roll_2 = %s,
+                    pitch_2 = %s,
+                    yaw_2 = %s,
+                    updated_at = %s
+                    WHERE idx = 1
+                    """
+            self._db_execute(sql, (imu.roll, imu.pitch, imu.yaw, imu2.roll, imu2.pitch, imu2.yaw, datetime.now() ))
+        except Exception as e:
+            logging.error(f"Failed to write calibrated result to DB: {e}")
 
     def _wrap180(self, angle):
         """Wrap angle to (-180, 180]"""
@@ -379,10 +385,10 @@ class CalibrateWorker(QThread):
             self._set_first_data()
 
             # Update current data
-            self._update_current_data()
+            self._read_current_data()
 
             while self.continuous_mode:
-                self._update_current_data()
+                self._read_current_data()
 
                 method1_result = self._calibrate_method1_cumulative()
                 method2_result = self._calibrate_method2_incremental()
@@ -391,6 +397,8 @@ class CalibrateWorker(QThread):
                     copy.deepcopy(method1_result),
                     copy.deepcopy(method2_result)
                 )
+
+                self._write_calibrated_result(method1_result, method2_result)
 
                 time.sleep(0.1)  # 10 Hz update
 

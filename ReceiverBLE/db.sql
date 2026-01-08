@@ -132,3 +132,22 @@ CREATE TABLE pressure_mat_history (
     updated_at DATETIME(3),
     PRIMARY KEY (idx)
 );
+
+
+
+drop table calibrated_imu;
+
+CREATE TABLE calibrated_imu (
+    idx INT NOT NULL AUTO_INCREMENT,
+    yaw FLOAT,
+    pitch FLOAT,
+    roll FLOAT,
+    yaw_2 FLOAT,
+    pitch_2 FLOAT,
+    roll_2 FLOAT,
+    updated_at DATETIME(3),
+    PRIMARY KEY (idx)
+);
+
+INSERT INTO calibrated_imu(yaw, pitch, roll, yaw_2, pitch_2, roll_2)
+VALUES (0,0,0, 0, 0, 0);
