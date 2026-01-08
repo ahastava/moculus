@@ -7,17 +7,17 @@ from datetime import datetime
 import time
 import traceback
 import logging
+from IMUState import IMUState
 
-
-@dataclass
-class IMU:
-    yaw: float = 0.0
-    pitch: float = 0.0
-    roll: float = 0.0
-    quat_r: float = 0.0
-    quat_i: float = 0.0
-    quat_j: float = 0.0
-    quat_k: float = 0.0
+# @dataclass
+# class IMU:
+#     yaw: float = 0.0
+#     pitch: float = 0.0
+#     roll: float = 0.0
+#     quat_r: float = 0.0
+#     quat_i: float = 0.0
+#     quat_j: float = 0.0
+#     quat_k: float = 0.0
 
 
 class CalibrateWorker(QThread):
@@ -40,21 +40,21 @@ class CalibrateWorker(QThread):
         logging.info(f"DB Config loaded: host={self.DB_HOST}, user={self.DB_USER}, db={self.DB_NAME}")
 
         # Initial calibration values (t=0)
-        self.probe_imu_0 = IMU()
-        self.car_imu_0 = IMU()
+        self.probe_imu_0 = IMUState()
+        self.car_imu_0 = IMUState()
 
         # Previous frame values
-        self.car_imu_prev = IMU()
-        self.probe_imu_prev = IMU()
+        self.car_imu_prev = IMUState()
+        self.probe_imu_prev = IMUState()
 
         # Current frame values
-        self.car_imu_current = IMU()
-        self.probe_imu_current = IMU()
+        self.car_imu_current = IMUState()
+        self.probe_imu_current = IMUState()
 
         # Calibrated results
-        self.probe_imu_prev_calibrated = IMU()
-        self.probe_imu_calibrated_1 = IMU()  # Method 1: Cumulative
-        self.probe_imu_calibrated_2 = IMU()  # Method 2: Incremental
+        self.probe_imu_prev_calibrated = IMUState()
+        self.probe_imu_calibrated_1 = IMUState()  # Method 1: Cumulative
+        self.probe_imu_calibrated_2 = IMUState()  # Method 2: Incremental
 
         # Operation queue
         self.pending_operation = None
@@ -175,7 +175,7 @@ class CalibrateWorker(QThread):
             self.status_signal.emit("Resetting history tables...", "orange")
 
             self._db_execute("SET SQL_SAFE_UPDATES = 0;")
-            result1 = self._db_execute("TRUNCATE TABLE  probe_imu_history;")
+            result1 = self._db_execute("TRUNCATE TABLE probe_imu_history;")
             logging.info(f"Probe delete result: {result1}")
 
             result1 = self._db_execute("""
@@ -218,10 +218,18 @@ class CalibrateWorker(QThread):
         )
 
         if data and len(data) > 0:
-            self.probe_imu_0 = IMU(
-                data[0]['yaw'], data[0]['pitch'], data[0]['roll'],
-                data[0]['quat_r'], data[0]['quat_i'], data[0]['quat_j'], data[0]['quat_k']
+            self.probe_imu_0 = IMUState()
+
+            self.probe_imu_0.update(
+                data[0]['roll'],
+                data[0]['pitch'],
+                data[0]['yaw_calibrated'],
+                data[0]['quat_r'],
+                data[0]['quat_i'],
+                data[0]['quat_j'],
+                data[0]['quat_k']
             )
+
             logging.info(f"Probe t=0: {data}")
 
         # Get car IMU initial data
@@ -230,9 +238,20 @@ class CalibrateWorker(QThread):
         )
 
         if data and len(data) > 0:
-            self.car_imu_0 = IMU(
-                data[0]['yaw'], data[0]['pitch'], data[0]['roll'],
-                data[0]['quat_r'], data[0]['quat_i'], data[0]['quat_j'], data[0]['quat_k']
+            # self.car_imu_0 = IMUState(
+            #     data[0]['yaw_calibrated'], data[0]['pitch'], data[0]['roll'],
+            #     data[0]['quat_r'], data[0]['quat_i'], data[0]['quat_j'], data[0]['quat_k']
+            # )
+            self.car_imu_0 = IMUState()
+
+            self.car_imu_0.update(
+                data[0]['roll'],
+                data[0]['pitch'],
+                data[0]['yaw_calibrated'],
+                data[0]['quat_r'],
+                data[0]['quat_i'],
+                data[0]['quat_j'],
+                data[0]['quat_k']
             )
             logging.info(f"Car t=0: {data}")
 
@@ -259,9 +278,20 @@ class CalibrateWorker(QThread):
         )
 
         if data and len(data) > 0:
-            self.probe_imu_current = IMU(
-                data[0]['yaw'], data[0]['pitch'], data[0]['roll'],
-                data[0]['quat_r'], data[0]['quat_i'], data[0]['quat_j'], data[0]['quat_k']
+            # self.probe_imu_current = IMU(
+            #     data[0]['yaw_calibrated'], data[0]['pitch'], data[0]['roll'],
+            #     data[0]['quat_r'], data[0]['quat_i'], data[0]['quat_j'], data[0]['quat_k']
+            # )
+            self.probe_imu_current = IMUState()
+
+            self.probe_imu_current.update(
+                data[0]['roll'],
+                data[0]['pitch'],
+                data[0]['yaw_calibrated'],
+                data[0]['quat_r'],
+                data[0]['quat_i'],
+                data[0]['quat_j'],
+                data[0]['quat_k']
             )
             logging.info(f"Probe current: {data}")
 
@@ -271,9 +301,20 @@ class CalibrateWorker(QThread):
         )
 
         if data and len(data) > 0:
-            self.car_imu_current = IMU(
-                data[0]['yaw'], data[0]['pitch'], data[0]['roll'],
-                data[0]['quat_r'], data[0]['quat_i'], data[0]['quat_j'], data[0]['quat_k']
+            # self.car_imu_current = IMU(
+            #     data[0]['yaw_calibrated'], data[0]['pitch'], data[0]['roll'],
+            #     data[0]['quat_r'], data[0]['quat_i'], data[0]['quat_j'], data[0]['quat_k']
+            # )
+            self.car_imu_current = IMUState()
+
+            self.car_imu_current.update(
+                data[0]['roll'],
+                data[0]['pitch'],
+                data[0]['yaw_calibrated'],
+                data[0]['quat_r'],
+                data[0]['quat_i'],
+                data[0]['quat_j'],
+                data[0]['quat_k']
             )
             logging.info(f"Car current: {data}")
 

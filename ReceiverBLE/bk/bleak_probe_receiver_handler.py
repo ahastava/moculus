@@ -1,8 +1,5 @@
 import asyncio
 from bleak import BleakClient
-import struct
-from datetime import datetime
-import mysql_interface
 
 # Replace with your BLE device address and characteristic UUID
 DEVICE_ADDRESS = "BB:13:4D:D8:C7:42" #"82:EC:2D:57:38:16"

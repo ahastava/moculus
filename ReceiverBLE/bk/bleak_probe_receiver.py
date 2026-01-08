@@ -3,7 +3,8 @@ from bleak import  BleakClient, BleakScanner
 
 import struct
 from datetime import datetime
-import mysql_interface
+from bk import mysql_interface
+
 
 ###
 

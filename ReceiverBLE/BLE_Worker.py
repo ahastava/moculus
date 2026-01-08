@@ -1,16 +1,16 @@
 import asyncio
 import logging
-from bk import dual_imu_handler
+import UltraFastDatabaseManager
 from bleak import BleakClient, BleakScanner
 from PyQt6.QtCore import pyqtSignal, QThread
 from datetime import datetime
-
+from IMUState import IMUState
 
 # --- BLE WORKER THREAD ---
 class BLEWorkerThread(QThread):
     """Thread to run the async BLE connection without blocking the GUI"""
 
-    imu_data_signal = pyqtSignal(float, float, float)  # roll, pitch, yaw
+    imu_data_signal = pyqtSignal(object)  # roll, pitch, yaw
     ble_status_signal = pyqtSignal(str, str)  # status_message, color_code
     connection_state_signal = pyqtSignal(bool)  # True=connected, False=disconnected
 
@@ -27,6 +27,8 @@ class BLEWorkerThread(QThread):
         self.is_connected = False
         self.connection_attempts = 0
         self.max_connection_attempts = 3  # Max attempts before giving up
+
+        self.imu = IMUState()
 
     def run(self):
         """Run the asyncio event loop in this thread"""
@@ -67,7 +69,7 @@ class BLEWorkerThread(QThread):
         try:
             text = data.decode('utf-8').strip()
             parts = [p.strip() for p in text.split(',')]
-            print("1111111111")
+
             if len(parts) >= 12:
                 BLECounter = int(parts[0])
                 reportSecond = int(parts[1])
@@ -78,6 +80,8 @@ class BLEWorkerThread(QThread):
                 yaw = float(parts[5].replace("YPR=", ""))
                 pitch = float(parts[6])
                 roll = float(parts[7])
+
+                self.imu.update(roll, pitch, yaw)
 
                 quat_r = float(parts[8].replace("Q=", ""))
                 quat_i = float(parts[9])
@@ -91,6 +95,8 @@ class BLEWorkerThread(QThread):
                     'transferred_loop_count': transferredLoopCount,
                     'status': status,
                     'yaw': yaw,
+                    'yaw_delta': self.imu.yaw_delta,
+                    'yaw_calibrated': self.imu.yaw_calibrated,
                     'pitch': pitch,
                     'roll': roll,
                     'quat_r': quat_r,
@@ -109,10 +115,10 @@ class BLEWorkerThread(QThread):
                 )
 
                 # Emit signal to update GUI (thread-safe)
-                self.imu_data_signal.emit(float(roll), float(pitch), float(yaw))
+                self.imu_data_signal.emit(self.imu)
 
                 if self.db_manager:
-                    # Fast async update of current record - already on the right loop!
+                    # Fast async update of current record - already on the right loop!f
                     asyncio.create_task(
                         self.db_manager.update_current(data_dict, timestamp)
                     )
@@ -121,6 +127,10 @@ class BLEWorkerThread(QThread):
             logging.error(f"Notification error: {e}")
             self.ble_status_signal.emit(f"Notification error: {str(e)}", "orange")
 
+    def request_yaw_reset(self):
+
+        self.imu.calibrate_yaw()
+
     async def async_main(self):
         """Async main function to connect to BLE device"""
         self.ble_status_signal.emit("Ready to connect", "orange")
@@ -128,8 +138,8 @@ class BLEWorkerThread(QThread):
 
         try:
             # Create DB manager on THIS thread's event loop
-            DB_CONFIG = dual_imu_handler.DB_CONFIG
-            self.db_manager = dual_imu_handler.UltraFastDatabaseManager(
+            DB_CONFIG = UltraFastDatabaseManager.DB_CONFIG
+            self.db_manager = UltraFastDatabaseManager.UltraFastDatabaseManager(
                 DB_CONFIG, self.db_table_name, self.db_history_table_name
             )
 
@@ -207,7 +217,7 @@ class BLEWorkerThread(QThread):
             self.connection_state_signal.emit(True)
 
             await self.client.start_notify(
-                dual_imu_handler.CHARACTERISTIC_UUID_1,
+                UltraFastDatabaseManager.CHARACTERISTIC_UUID_1,
                 self.notification_handler
             )
         except Exception as e:
@@ -233,7 +243,7 @@ class BLEWorkerThread(QThread):
             if self.client and self.client.is_connected:
                 self.ble_status_signal.emit("Disconnecting...", "orange")
                 await self.client.stop_notify(
-                    dual_imu_handler.CHARACTERISTIC_UUID_1
+                    UltraFastDatabaseManager.CHARACTERISTIC_UUID_1
                 )
                 await self.client.disconnect()
 

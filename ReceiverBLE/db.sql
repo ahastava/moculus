@@ -9,6 +9,8 @@ CREATE TABLE probe_imu (
     angle_report_loop_count int,
     transferred_loop_count int,
     yaw FLOAT,
+    yaw_delta FLOAT,
+    yaw_calibrated FLOAT,
     pitch FLOAT,
     roll FLOAT,
     quat_r FLOAT,
@@ -20,8 +22,8 @@ CREATE TABLE probe_imu (
     PRIMARY KEY (idx)
 );
 
-INSERT INTO probe_imu(ble_counter, report_second,angle_report_loop_count,transferred_loop_count, yaw, pitch, roll, quat_r, quat_i, quat_j, quat_k, status)
-VALUES (1, 0,0,0,0, 0, 0, 1, 0, 0, 0, 0);
+INSERT INTO probe_imu(ble_counter, report_second,angle_report_loop_count,transferred_loop_count, yaw, yaw_delta, yaw_calibrated,  pitch, roll, quat_r, quat_i, quat_j, quat_k, status)
+VALUES (1, 0,0,0,0, 0, 0, 0, 0, 1, 0, 0, 0, 0);
 
 
 
@@ -34,6 +36,8 @@ CREATE TABLE probe_imu_history (
     angle_report_loop_count int,
     transferred_loop_count int,
     yaw FLOAT,
+	yaw_delta FLOAT,
+    yaw_calibrated FLOAT,
     pitch FLOAT,
     roll FLOAT,
     quat_r FLOAT,
@@ -50,6 +54,7 @@ DELETE FROM probe_imu_history;
 SET SQL_SAFE_UPDATES = 1;
 
 
+drop table car_imu;
 
 CREATE TABLE car_imu (
     idx INT NOT NULL AUTO_INCREMENT,
@@ -58,6 +63,8 @@ CREATE TABLE car_imu (
     angle_report_loop_count int,
     transferred_loop_count int,
     yaw FLOAT,
+	yaw_delta FLOAT,
+    yaw_calibrated FLOAT,
     pitch FLOAT,
     roll FLOAT,
     quat_r FLOAT,
@@ -69,8 +76,8 @@ CREATE TABLE car_imu (
     PRIMARY KEY (idx)
 );
 
-INSERT INTO car_imu(ble_counter, report_second,angle_report_loop_count,transferred_loop_count, yaw, pitch, roll, quat_r, quat_i, quat_j, quat_k, status)
-VALUES (1, 0,0,0,0, 0, 0, 1, 0, 0, 0, 0);
+INSERT INTO car_imu(ble_counter, report_second,angle_report_loop_count,transferred_loop_count, yaw, yaw_delta, yaw_calibrated, pitch, roll, quat_r, quat_i, quat_j, quat_k, status)
+VALUES (1, 0,0,0,0, 0, 0, 0, 0, 1, 0, 0, 0, 0);
 
 
 
@@ -83,6 +90,8 @@ CREATE TABLE car_imu_history (
     angle_report_loop_count int,
     transferred_loop_count int,
     yaw FLOAT,
+	yaw_delta FLOAT,
+    yaw_calibrated FLOAT,
     pitch FLOAT,
     roll FLOAT,
     quat_r FLOAT,

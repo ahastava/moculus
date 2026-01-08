@@ -1,4 +1,4 @@
-import mysql_interface
+from bk import mysql_interface
 
 data = mysql_interface.db_select(None, 'select * from probe_imu', [])
 if len(data) == 0:

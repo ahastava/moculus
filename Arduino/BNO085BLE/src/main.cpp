@@ -86,7 +86,6 @@ void myPrintln(const T &msg)
 // }
 
 //-----------------------
-
 #ifdef FAST_MODE
 // Top frequency is reported to be 1000Hz (but freq is somewhat variable)
 sh2_SensorId_t reportType = SH2_GYRO_INTEGRATED_RV;
@@ -197,6 +196,7 @@ void setup(void)
   myPrintln(BLE.address()); //  prints MAC as string
 
   myPrintln("BLE Device is ready to pair");
+
 }
 
 void quaternionToEuler(float qr, float qi, float qj, float qk, euler_t *ypr, bool degrees = false)
@@ -279,12 +279,10 @@ void loop()
     }
 
     bool re = bno08x.getSensorEvent(&sensorValue);
-
     // Has to wait 1ms here! otherwise will only see 1-4 updates every second, since the I2C take time to reponse, without delay it will throttle itself.
     // The Root Cause: I2C/SPI Bus Timing Issue
     // Claude: when blindly poll the I2C bus, which causes severe blocking. The sensor doesn't know you've read the data, and you don't know when new data is ready.
     delay(1); // 1 ms //essential wait
-
     if (re)
     {
       // in this demo only one report type will be received depending on FAST_MODE define (above)

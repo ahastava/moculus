@@ -1,5 +1,4 @@
 import sys
-
 import logging
 from datetime import datetime
 
@@ -9,24 +8,25 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCloseEvent
 
 import BLE_Worker
-from bk import dual_imu_handler
 from calibrate_worker import CalibrateWorker
+from IMUState import IMUState
 
 import config
-class IMUControlPanel(QWidget):
-    """Widget for controlling a single IMU device"""
 
-    def __init__(self, device_name, device_address, db_table_name, db_history_table_name, col_count, parent=None):
+
+class BaseIMUDisplayPanel(QWidget):
+    """Base class for IMU display panels with common UI elements"""
+
+    def __init__(self, panel_title, col_count, parent=None):
         super().__init__(parent)
-        self.device_name = device_name
-        self.device_address = device_address
-        self.db_table_name = db_table_name
-        self.db_history_table_name = db_history_table_name
+        self.panel_title = panel_title
         self.col_count = col_count
-        self.ble_worker = None
+
+        self.update_count = 0
+        self.refresh_rate = 0
 
         self.init_ui()
-        self.setup_ble_worker()
+        self.setup_refresh_timer()
 
     def init_ui(self):
         """Initialize the UI components"""
@@ -35,7 +35,7 @@ class IMUControlPanel(QWidget):
         layout.setSpacing(12)
 
         # Device title
-        title = QLabel(f"{self.device_name} Control")
+        title = QLabel(f"{self.panel_title}")
         title.setStyleSheet("""
             QLabel {
                 font-size: 18px;
@@ -50,8 +50,41 @@ class IMUControlPanel(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        # Connection status group
-        status_group = QGroupBox("Connection Status")
+        # Status group
+        status_group = self.create_status_group()
+        layout.addWidget(status_group)
+
+        # IMU Data Display
+        data_group = self.create_data_display_group()
+        layout.addWidget(data_group)
+
+        # Log display box
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        self.log_box.setMinimumHeight(100)
+        self.log_box.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #dcdcdc;
+                font-family: Consolas, monospace;
+                font-size: 12px;
+                border: 1px solid #34495e;
+                border-radius: 4px;
+                padding: 6px;
+            }
+            QScrollBar:vertical {
+                background: #2c3e50;
+                width: 10px;
+                margin: 0px;
+                border-radius: 4px;
+            }
+        """)
+        layout.addWidget(self.log_box)
+        layout.addStretch()
+
+    def create_status_group(self):
+        """Create status display group - to be customized by subclasses"""
+        status_group = QGroupBox("Status")
         status_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -93,57 +126,15 @@ class IMUControlPanel(QWidget):
         indicator_layout.addWidget(self.status_label, stretch=1)
         status_layout.addLayout(indicator_layout)
 
-        # Connection buttons
-        button_layout = QHBoxLayout()
-        self.connect_button = QPushButton("Connect")
-        self.connect_button.setStyleSheet("""
-            QPushButton {
-                background-color: #27ae60;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 5px;
-                font-size: 13px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #229954;
-            }
-            QPushButton:disabled {
-                background-color: #95a5a6;
-            }
-        """)
-        self.connect_button.clicked.connect(self.connect_device)
-
-        self.disconnect_button = QPushButton("Disconnect")
-        self.disconnect_button.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 5px;
-                font-size: 13px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-            QPushButton:disabled {
-                background-color: #95a5a6;
-            }
-        """)
-        self.disconnect_button.clicked.connect(self.disconnect_device)
-        self.disconnect_button.setEnabled(False)
-
-        button_layout.addWidget(self.connect_button)
-        button_layout.addWidget(self.disconnect_button)
-        status_layout.addLayout(button_layout)
+        # Control buttons - to be added by subclasses
+        self.button_layout = QHBoxLayout()
+        status_layout.addLayout(self.button_layout)
 
         status_group.setLayout(status_layout)
-        layout.addWidget(status_group)
+        return status_group
 
-        # IMU Data Display
+    def create_data_display_group(self):
+        """Create IMU data display group"""
         data_group = QGroupBox("IMU Data")
         data_group.setStyleSheet("""
             QGroupBox {
@@ -160,12 +151,14 @@ class IMUControlPanel(QWidget):
                 color: #3498db;
             }
         """)
-        # --- two columns ---
+
         cols_layout = QHBoxLayout()
 
-        # left column (method 1)
+        # Column 1 - Method 1 or Primary display
         col1 = QVBoxLayout()
-        col1.addWidget(QLabel("<b>Method 1</b>"))
+        col1_title = "Method 1" if self.col_count == 2 else ""
+        col1.addWidget(QLabel(f"<b>{col1_title}</b>"))
+
         self.yaw_label_1 = QLabel("Yaw: --")
         self.pitch_label_1 = QLabel("Pitch: --")
         self.roll_label_1 = QLabel("Roll: --")
@@ -199,142 +192,53 @@ class IMUControlPanel(QWidget):
         col1.addWidget(self.refresh_label_1)
         cols_layout.addLayout(col1)
 
-        if self.col_count == 2: #col for method 2 display
-        #     # right column (method 2)
+        # Column 2 - Method 2 (optional)
+        if self.col_count == 2:
             col2 = QVBoxLayout()
             col2.addWidget(QLabel("<b>Method 2</b>"))
+
             self.yaw_label_2 = QLabel("Yaw: --")
             self.pitch_label_2 = QLabel("Pitch: --")
             self.roll_label_2 = QLabel("Roll: --")
+
             for lbl in [self.yaw_label_2, self.pitch_label_2, self.roll_label_2]:
                 lbl.setStyleSheet("""
-                           QLabel {
-                               font-size: 14px;
-                               font-weight: bold;
-                               color: #2c3e50;
-                               padding: 6px;
-                               background-color: #ecf0f1;
-                               border-radius: 4px;
-                               margin: 2px;
-                               min-width: 100px;
-                           }
-                       """)
+                    QLabel {
+                        font-size: 14px;
+                        font-weight: bold;
+                        color: #2c3e50;
+                        padding: 6px;
+                        background-color: #ecf0f1;
+                        border-radius: 4px;
+                        margin: 2px;
+                        min-width: 100px;
+                    }
+                """)
                 col2.addWidget(lbl)
 
             self.refresh_label_2 = QLabel("Refresh: -- Hz")
             self.refresh_label_2.setStyleSheet("""
-                 QLabel {
-                     font-size: 14px;
-                     font-weight: bold;
-                     color: #2c3e50;
-                     padding: 6px;
-                     background-color: #ecf0f1;
-                     border-radius: 4px;
-                     margin: 2px;
-                 }
-             """)
+                QLabel {
+                    font-size: 14px;
+                    font-weight: bold;
+                    color: #2c3e50;
+                    padding: 6px;
+                    background-color: #ecf0f1;
+                    border-radius: 4px;
+                    margin: 2px;
+                }
+            """)
             col2.addWidget(self.refresh_label_2)
-
             cols_layout.addLayout(col2)
 
-
         data_group.setLayout(cols_layout)
-        layout.addWidget(data_group)
+        return data_group
 
-        # Log display box
-        self.log_box = QTextEdit()
-        self.log_box.setReadOnly(True)
-        self.log_box.setMinimumHeight(100)
-        self.log_box.setStyleSheet("""
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #dcdcdc;
-                font-family: Consolas, monospace;
-                font-size: 12px;
-                border: 1px solid #34495e;
-                border-radius: 4px;
-                padding: 6px;
-            }
-            QScrollBar:vertical {
-                background: #2c3e50;
-                width: 10px;
-                margin: 0px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical
-        """)
-        layout.addWidget(self.log_box)
-
-        layout.addStretch()
-
-    def setup_ble_worker(self):
-        """Setup BLE worker thread"""
-
-        self.ble_worker = BLE_Worker.BLEWorkerThread(
-            self.device_address,
-            self.db_table_name,
-            self.db_history_table_name
-        )
-        self.ble_worker.imu_data_signal.connect(self.update_imu_data)
-        self.ble_worker.ble_status_signal.connect(self.update_status)
-        # just use a simple binary on/off to control the connect and disconnect button
-        # signal can also toggle the button, so this maybe create a flicker of the button
-        # try later
-        # otherwise, connect, cancel, disconnect with existing/non exist device would be too hard for both ui and ble
-        # module to update
-        if self.col_count == 1:
-            self.ble_worker.connection_state_signal.connect(self.update_connection_state)
-            self.ble_worker.start()
-
-        self.update_count = 0
-        self.refresh_rate = 0
-
-        # Timer to update refresh Hz once per second
+    def setup_refresh_timer(self):
+        """Setup timer for refresh rate calculation"""
         self.refresh_timer = QTimer()
         self.refresh_timer.timeout.connect(self.update_refresh_rate)
         self.refresh_timer.start(1000)  # every 1 second
-
-    def connect_device(self):
-        """Request connection to device"""
-        if self.ble_worker is None:
-            self.setup_ble_worker()
-
-        self.ble_worker.request_connect()
-        self.connect_button.setEnabled(False)
-        self.disconnect_button.setEnabled(True)
-
-    def reset_connect_button(self):
-        self.connect_button.setText("Connect")
-        # self.connect_button.setStyleSheet("""
-        #     QPushButton {
-        #         background-color: #27ae60;
-        #         color: white;
-        #         border: none;
-        #         padding: 8px 16px;
-        #         border-radius: 5px;
-        #         font-size: 13px;
-        #         font-weight: 600;
-        #     }
-        #     QPushButton:hover { background-color: #229954; }
-        # """)
-        self.connect_button.clicked.disconnect()
-        self.connect_button.clicked.connect(self.connect_device)
-
-    def disconnect_device(self):
-
-        if self.ble_worker:
-
-            logging.info("disconnect_device")
-            logging.info("self.ble_worker.is_connected: %s", self.ble_worker.is_connected)
-
-            if not self.ble_worker.is_connected:
-                self.update_status("Connection cancelled", "orange")
-                self.reset_connect_button()
-
-            self.ble_worker.request_disconnect()
-            self.disconnect_button.setEnabled(False)
-            self.connect_button.setEnabled(True)
-
 
     def update_imu_data(self, roll, pitch, yaw, roll_2=0, pitch_2=0, yaw_2=0):
         """Update IMU data display"""
@@ -370,12 +274,9 @@ class IMUControlPanel(QWidget):
         }
 
         color = color_map.get(color_code.lower(), "#2c3e50")
-        # self.status_label.setStyleSheet(
-        #     f"QLabel {{ color: {color}; font-weight: bold; font-size: 13px; }}"
-        # )
 
         self.status_label.setWordWrap(True)
-        self.status_label.setFixedWidth(250)  # prevent sudden window expansion
+        self.status_label.setFixedWidth(250)
         self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.status_label.setStyleSheet(f"""
             QLabel {{
@@ -388,10 +289,162 @@ class IMUControlPanel(QWidget):
             }}
         """)
 
-        # --- Add to log ---
+        # Add to log
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.log_box.append(f"[{timestamp}] {status_message}")
         self.log_box.moveCursor(self.log_box.textCursor().MoveOperation.End)
+
+    def cleanup(self):
+        """Cleanup resources - to be overridden by subclasses"""
+        pass
+
+
+class IMUControlPanel(BaseIMUDisplayPanel):
+    """Widget for controlling a single IMU device with BLE connection"""
+
+    def __init__(self, device_name, device_address, db_table_name, db_history_table_name, parent=None):
+        self.device_name = device_name
+        self.device_address = device_address
+        self.db_table_name = db_table_name
+        self.db_history_table_name = db_history_table_name
+        self.ble_worker = None
+
+        # Initialize base class with single column display
+        super().__init__(f"{device_name} Control", 1, parent)
+
+        # Add BLE-specific buttons
+        self.add_ble_control_buttons()
+
+        # Setup BLE worker
+        self.setup_ble_worker()
+
+    def add_ble_control_buttons(self):
+        """Add BLE connection control buttons"""
+        self.connect_button = QPushButton("Connect")
+        self.connect_button.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #229954;
+            }
+            QPushButton:disabled {
+                background-color: #95a5a6;
+            }
+        """)
+        self.connect_button.clicked.connect(self.connect_device)
+
+        self.reset_button = QPushButton("Reset Yaw")
+        self.reset_button.setStyleSheet("""
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:disabled {
+                background-color: #95a5a6;
+            }
+        """)
+
+        self.reset_button.clicked.connect(self.calibrate_yaw)
+        self.reset_button.setEnabled(False)
+
+        self.disconnect_button = QPushButton("Disconnect")
+        self.disconnect_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #95a5a6;
+            }
+        """)
+        self.disconnect_button.clicked.connect(self.disconnect_device)
+        self.disconnect_button.setEnabled(False)
+
+        self.button_layout.addWidget(self.connect_button)
+        self.button_layout.addWidget(self.reset_button)
+        self.button_layout.addWidget(self.disconnect_button)
+
+    def setup_ble_worker(self):
+        """Setup BLE worker thread"""
+        self.ble_worker = BLE_Worker.BLEWorkerThread(
+            self.device_address,
+            self.db_table_name,
+            self.db_history_table_name
+        )
+        self.ble_worker.imu_data_signal.connect(self.on_imu_data_received)
+        self.ble_worker.ble_status_signal.connect(self.update_status)
+        self.ble_worker.connection_state_signal.connect(self.update_connection_state)
+        self.ble_worker.start()
+
+    def connect_device(self):
+        """Request connection to device"""
+        if self.ble_worker is None:
+            self.setup_ble_worker()
+
+        self.ble_worker.request_connect()
+        self.connect_button.setEnabled(False)
+        self.reset_button.setEnabled(True)
+        self.disconnect_button.setEnabled(True)
+
+    def reset_connect_button(self):
+        """Reset connect button to initial state"""
+        self.connect_button.setText("Connect")
+        self.connect_button.clicked.disconnect()
+        self.connect_button.clicked.connect(self.connect_device)
+
+    def calibrate_yaw(self):
+        if not self.ble_worker:
+            self.update_status("Not connected (no BLE worker).", "orange")
+            return
+        self.ble_worker.request_yaw_reset()
+
+    def disconnect_device(self):
+        """Disconnect from device"""
+        if self.ble_worker:
+            logging.info("disconnect_device")
+            logging.info("self.ble_worker.is_connected: %s", self.ble_worker.is_connected)
+
+            if not self.ble_worker.is_connected:
+                self.update_status("Connection cancelled", "orange")
+                self.reset_connect_button()
+
+            self.ble_worker.request_disconnect()
+            self.disconnect_button.setEnabled(False)
+            self.reset_button.setEnabled(False)
+            self.connect_button.setEnabled(True)
+
+    def on_imu_data_received(self, imu: IMUState, roll_2=0, pitch_2=0, yaw_2=0):
+        """Handle incoming IMU data from BLE worker"""
+
+        # Update display with calibrated yaw
+        self.roll_label_1.setText(f"Roll: {imu.roll:.1f}°")
+        self.pitch_label_1.setText(f"Pitch: {imu.pitch:.1f}°")
+        self.yaw_label_1.setText(f"Yaw: {imu.yaw:.1f}°, calibrated: {imu.yaw_calibrated:.1f}")
+
+        self.update_count += 1
 
     def update_connection_state(self, is_connected):
         """Update connection state UI"""
@@ -404,6 +457,7 @@ class IMUControlPanel(QWidget):
                 }
             """)
             self.connect_button.setEnabled(False)
+            self.reset_button.setEnabled(True)
             self.disconnect_button.setEnabled(True)
         else:
             logging.info("not connected")
@@ -414,6 +468,7 @@ class IMUControlPanel(QWidget):
                 }
             """)
             self.connect_button.setEnabled(True)
+            self.reset_button.setEnabled(False)
             self.disconnect_button.setEnabled(False)
 
     def cleanup(self):
@@ -423,30 +478,19 @@ class IMUControlPanel(QWidget):
             self.ble_worker.wait(5000)
 
 
-class CalibratedIMUPanel(IMUControlPanel):
-    """UI panel for calibrated IMU (same style as others but different function)"""
+class CalibratedIMUPanel(BaseIMUDisplayPanel):
+    """UI panel for calibrated IMU - displays results from two calibration methods"""
 
     def __init__(self, db_manager, parent=None):
+        # Initialize base class with two column display
+        super().__init__("Calibrated IMU", 2, parent)
 
-        #device_name, device_address, db_table_name, db_history_table_name, col_count,
-        super().__init__("Calibrated IMU", "N/A", "N/A", "N/A", 2, parent)
-
+        # Add calibration-specific buttons
+        self.add_calibration_control_buttons()
 
         # Create calibration worker
         self.calibrate_worker = None
         self.setup_calibrate_worker()
-
-        # Change button labels
-        self.connect_button.setText("Reset History Table")
-        self.disconnect_button.setText("Start Calibration")
-        self.disconnect_button.setEnabled(True)  # Enable calibration button
-
-        # Rewire buttons
-        self.connect_button.clicked.disconnect()
-        self.connect_button.clicked.connect(self.reset_history_table)
-
-        self.disconnect_button.clicked.disconnect()
-        self.disconnect_button.clicked.connect(self.start_calibration)
 
         # Update initial status
         self.status_label.setText("Ready for calibration")
@@ -456,6 +500,57 @@ class CalibratedIMUPanel(IMUControlPanel):
                 color: #f1c40f;
             }
         """)
+
+    def add_calibration_control_buttons(self):
+        """Add calibration control buttons"""
+        self.reset_history_button = QPushButton("Reset History Table")
+        self.reset_history_button.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #229954;
+            }
+            QPushButton:disabled {
+                background-color: #95a5a6;
+            }
+        """)
+        self.reset_history_button.clicked.connect(self.reset_history_table)
+
+        # Empty button for spacing
+        self.spacer_button = QPushButton("")
+        self.spacer_button.setEnabled(False)
+        self.spacer_button.setVisible(False)
+
+        self.calibrate_button = QPushButton("Start Calibration")
+        self.calibrate_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 5px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #95a5a6;
+            }
+        """)
+        self.calibrate_button.clicked.connect(self.start_calibration)
+
+        self.button_layout.addWidget(self.reset_history_button)
+        self.button_layout.addWidget(self.spacer_button)
+        self.button_layout.addWidget(self.calibrate_button)
 
     def setup_calibrate_worker(self):
         """Setup calibration worker thread"""
@@ -467,16 +562,14 @@ class CalibratedIMUPanel(IMUControlPanel):
         self.calibrate_worker.reset_complete_signal.connect(self.on_reset_complete)
         self.calibrate_worker.error_signal.connect(self.on_error)
 
-        # Start the worker thread (it will wait for operations)
+        # Start the worker thread
         self.calibrate_worker.start()
         logging.info("Calibrate worker started")
 
     def reset_history_table(self):
         """Reset IMU history tables"""
         self.log_box.append("[Calibrated IMU] Resetting history tables...")
-        self.connect_button.setEnabled(False)
-
-        # Request the operation
+        self.reset_history_button.setEnabled(False)
         self.calibrate_worker.request_reset()
 
     def start_calibration(self):
@@ -485,69 +578,57 @@ class CalibratedIMUPanel(IMUControlPanel):
             # Start continuous calibration
             self.log_box.append("[Calibrated IMU] Starting continuous calibration...")
             self.calibrate_worker.toggle_continuous()
-            self.disconnect_button.setText("Stop Calibration")
-            self.disconnect_button.setStyleSheet("""
-                    QPushButton {
-                        background-color: #e67e22;
-                        color: white;
-                        border: none;
-                        padding: 8px 16px;
-                        border-radius: 5px;
-                        font-size: 13px;
-                        font-weight: 600;
-                    }
-                    QPushButton:hover { background-color: #d35400; }
-                """)
-            # Request the operation once; worker keeps looping
+            self.calibrate_button.setText("Stop Calibration")
+            self.calibrate_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #e67e22;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 5px;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+                QPushButton:hover { background-color: #d35400; }
+            """)
             self.calibrate_worker.request_calibration()
         else:
             # Stop continuous calibration
             self.log_box.append("[Calibrated IMU] Stopping calibration...")
             self.calibrate_worker.toggle_continuous()
-            self.disconnect_button.setText("Start Calibration")
-            self.disconnect_button.setStyleSheet("""
-                    QPushButton {
-                        background-color: #27ae60;
-                        color: white;
-                        border: none;
-                        padding: 8px 16px;
-                        border-radius: 5px;
-                        font-size: 13px;
-                        font-weight: 600;
-                    }
-                    QPushButton:hover { background-color: #229954; }
-                """)
+            self.calibrate_button.setText("Start Calibration")
+            self.calibrate_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #e74c3c;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 5px;
+                    font-size: 13px;
+                    font-weight: 600;
+                }
+                QPushButton:hover { background-color: #c0392b; }
+            """)
 
-    def on_calibration_complete(self, method1_result, method2_result):
+    def on_calibration_complete(self, method1_result_imu, method2_result_imu):
         """Handle calibration completion"""
-        # Update UI with method 1 results
-        self.update_imu_data(method1_result.roll, method1_result.pitch, method1_result.yaw,
-                             method2_result.roll, method2_result.pitch, method2_result.yaw)
-
-        # Log results
-        # self.log_box.append(
-        #     f"[Method 1] Roll={method1_result.roll:.1f}°, "
-        #     f"Pitch={method1_result.pitch:.1f}°, "
-        #     f"Yaw={method1_result.yaw:.1f}°"
-        # )
-        # self.log_box.append(
-        #     f"[Method 2] Roll={method2_result.roll:.1f}°, "
-        #     f"Pitch={method2_result.pitch:.1f}°, "
-        #     f"Yaw={method2_result.yaw:.1f}°"
-        # )
-
-        self.disconnect_button.setEnabled(True)
+        # Update UI with both methods' results
+        self.update_imu_data(
+            method1_result_imu.roll, method1_result_imu.pitch, method1_result_imu.yaw,
+            method2_result_imu.roll, method2_result_imu.pitch, method2_result_imu.yaw
+        )
+        self.calibrate_button.setEnabled(True)
 
     def on_reset_complete(self):
         """Handle reset completion"""
         self.log_box.append("[Calibrated IMU] History tables cleared successfully.")
-        self.connect_button.setEnabled(True)
+        self.reset_history_button.setEnabled(True)
 
     def on_error(self, error_message):
         """Handle errors"""
         self.log_box.append(f"[ERROR] {error_message}")
-        self.connect_button.setEnabled(True)
-        self.disconnect_button.setEnabled(True)
+        self.reset_history_button.setEnabled(True)
+        self.calibrate_button.setEnabled(True)
 
     def cleanup(self):
         """Cleanup resources"""
@@ -565,27 +646,7 @@ class DualIMUController(QMainWindow):
         super().__init__()
         self.setWindowTitle("Dual IMU Controller")
         self.setGeometry(100, 100, 900, 600)
-
-        # Initialize database managers
-        self.probe_db_manager = None
-        self.car_db_manager = None
-       # self.init_database_managers()
-
         self.init_ui()
-
-    def init_database_managers(self):
-        """Initialize database managers for both IMUs"""
-        # This will be called synchronously, but the actual pool creation is async
-        # You may need to modify this based on your setup
-        DB_CONFIG = dual_imu_handler.DB_CONFIG
-
-        self.probe_db_manager = dual_imu_handler.UltraFastDatabaseManager(
-            DB_CONFIG, "probe_imu", "probe_imu_history"
-        )
-
-        self.car_db_manager = dual_imu_handler.UltraFastDatabaseManager(
-            DB_CONFIG, "car_imu", "car_imu_history"
-        )
 
     def init_ui(self):
         """Initialize the user interface"""
@@ -629,9 +690,8 @@ class DualIMUController(QMainWindow):
         self.probe_panel = IMUControlPanel(
             "Probe IMU",
             PROBE_ADDRESS,
-            "probe_imu",
-            "probe_imu_history",
-            1,
+            "probe_imu", #"probe_imu", car_imu
+            "probe_imu_history", #"probe_imu_history", car_imu_history
             self
         )
         imu_layout.addWidget(self.probe_panel)
@@ -643,15 +703,14 @@ class DualIMUController(QMainWindow):
             CAR_ADDRESS,
             "car_imu",
             "car_imu_history",
-            1,
             self
         )
         imu_layout.addWidget(self.car_panel)
 
-        #### start of third column
-        self.calibrated_panel = CalibratedIMUPanel(self.probe_db_manager, self)
+        # Calibrated IMU Panel
+        self.calibrated_panel = CalibratedIMUPanel(None, self)
         imu_layout.addWidget(self.calibrated_panel)
-        # ### end of third column
+
         main_layout.addLayout(imu_layout)
 
         # Close button
@@ -673,38 +732,26 @@ class DualIMUController(QMainWindow):
         close_button.clicked.connect(self.close)
         main_layout.addWidget(close_button)
 
-
     def closeEvent(self, event: QCloseEvent):
         """Clean up resources when closing"""
-        # Cleanup IMU panels
         self.probe_panel.cleanup()
         self.car_panel.cleanup()
-
+        self.calibrated_panel.cleanup()
         event.accept()
 
 
 if __name__ == "__main__":
-
     # Create a root logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    # --- Console handler (stdout) ---
+    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
     console_handler.setFormatter(console_formatter)
 
-    # --- File handler ---
-    # log_filename = f"./log/example_{datetime.now():%Y%m%d_%H%M%S}.log"
-    # file_handler = logging.FileHandler(log_filename, encoding='utf-8')
-    # file_handler.setLevel(logging.INFO)
-    # file_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    # file_handler.setFormatter(file_formatter)
-
-    # --- Add both handlers ---
     logger.addHandler(console_handler)
-    #logger.addHandler(file_handler)
 
     app = QApplication(sys.argv)
     window = DualIMUController()

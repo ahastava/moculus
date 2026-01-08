@@ -1,5 +1,4 @@
-import config
-import mysql_interface
+from bk import mysql_interface
 import copy
 from dataclasses import dataclass
 

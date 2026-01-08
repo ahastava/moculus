@@ -60,6 +60,8 @@ class UltraFastDatabaseManager:
                            roll = %s,
                            pitch = %s,
                            yaw = %s,
+                           yaw_delta = %s,
+                           yaw_calibrated = %s,
                            quat_r = %s,
                            quat_i = %s,
                            quat_j = %s,
@@ -75,6 +77,8 @@ class UltraFastDatabaseManager:
                             data_dict['roll'],
                             data_dict['pitch'],
                             data_dict['yaw'],
+                            data_dict['yaw_delta'],
+                            data_dict['yaw_calibrated'],
                             data_dict['quat_r'],
                             data_dict['quat_i'],
                             data_dict['quat_j'],
@@ -87,9 +91,11 @@ class UltraFastDatabaseManager:
                     await cursor.execute(
                         f'''INSERT INTO {self.history_table_name}
                                                   (ble_counter, report_second, angle_report_loop_count,
-                                                   transferred_loop_count, status, roll, pitch, yaw,
+                                                   transferred_loop_count, status, roll, pitch, yaw, yaw_delta, yaw_calibrated,
                                                    quat_r, quat_i, quat_j, quat_k, updated_at)
-                                               VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                                               VALUES(%s, %s, %s, 
+                                               %s, %s, %s, %s, %s, %s, %s, 
+                                               %s, %s, %s, %s, %s)''',
                         (
                             data_dict['ble_counter'],
                             data_dict['report_second'],
@@ -99,6 +105,8 @@ class UltraFastDatabaseManager:
                             data_dict['roll'],
                             data_dict['pitch'],
                             data_dict['yaw'],
+                            data_dict['yaw_delta'],
+                            data_dict['yaw_calibrated'],
                             data_dict['quat_r'],
                             data_dict['quat_i'],
                             data_dict['quat_j'],
@@ -108,6 +116,7 @@ class UltraFastDatabaseManager:
                     )
 
                 await conn.commit()
+
         except Exception as e:
             logging.error(f"Failed to update current record in {self.table_name}: {e}")
 
