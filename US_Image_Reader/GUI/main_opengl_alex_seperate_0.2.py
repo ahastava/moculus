@@ -29,182 +29,6 @@ from datetime import datetime
 import logging
 
 
-# --- BLE WORKER THREAD ---
-class BLEWorkerThread(QThread):
-    """Thread to run the async BLE connection without blocking the GUI"""
-
-    # Signals to communicate with main thread
-    imu_data_signal = pyqtSignal(int, int, int)  # roll, pitch, yaw
-    ble_status_signal = pyqtSignal(str, str)  # status_message, color_code
-    connection_state_signal = pyqtSignal(bool)  # True=connected, False=disconnected
-
-    def __init__(self):
-        super().__init__()
-        self.running = False
-        self.should_connect = False
-        self.loop = None
-        self.db_manager = None
-        self.client = None
-        self.is_connected = False
-
-    def run(self):
-        """Run the asyncio event loop in this thread"""
-        self.running = True
-        try:
-            # Create new event loop for this thread
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-
-            # Run the async main function
-            self.loop.run_until_complete(self.async_main())
-        except Exception as e:
-            logging.error(f"BLE Worker error: {e}")
-            self.ble_status_signal.emit(f"Error: {str(e)}", "red")
-            self.connection_state_signal.emit(False)
-        finally:
-            if self.loop:
-                self.loop.close()
-
-    def request_connect(self):
-        """Request connection to BLE device"""
-        self.should_connect = True
-
-    def request_disconnect(self):
-        """Request disconnection from BLE device"""
-        self.should_connect = False
-
-    def notification_handler(self, sender, data):
-        """Handler for BLE notifications - modified to emit Qt signals"""
-        try:
-            text = data.decode('utf-8')
-            parts = text.split(',')
-
-            counter = int(parts[0])
-
-            yaw = float(parts[5].replace("YPR=", ""))
-            pitch = float(parts[6])
-            roll = float(parts[7])
-
-            #
-            # yaw = float(parts[1])
-            # pitch = float(parts[2])
-            # roll = float(parts[3])
-            timestamp = datetime.now()
-
-            print(f"BLE Data: counter {counter}, yaw {yaw:.2f}, pitch {pitch:.2f}, roll {roll:.2f}")
-
-            # Emit signal to update GUI (thread-safe)
-            self.imu_data_signal.emit(int(roll), int(pitch), int(yaw))
-
-            if self.db_manager:
-                # Fast async update of current record
-                asyncio.create_task(
-                    self.db_manager.update_current(counter, roll, pitch, yaw, timestamp)
-                )
-
-                # Queue for background history insert
-                self.db_manager.add_to_history_queue(counter, roll, pitch, yaw, timestamp)
-
-        except Exception as e:
-            logging.error(f"Notification error: {e}")
-            self.ble_status_signal.emit(f"Notification error: {str(e)}", "orange")
-
-    async def async_main(self):
-        """Async main function to connect to BLE device"""
-        logging.basicConfig(level=logging.INFO)
-
-        # Initialize database manager
-        self.db_manager = bleak_probe_receiver_handler_db_async.UltraFastDatabaseManager(
-            bleak_probe_receiver_handler_db_async.DB_CONFIG
-        )
-        await self.db_manager.create_pool()
-
-        self.ble_status_signal.emit("Ready to connect", "orange")
-        self.connection_state_signal.emit(False)
-
-        try:
-            # Main loop - handle connection/disconnection requests
-            while self.running:
-                if self.should_connect and not self.is_connected:
-                    await self.connect_to_device()
-                elif not self.should_connect and self.is_connected:
-                    await self.disconnect_from_device()
-
-                await asyncio.sleep(0.1)
-
-        except Exception as e:
-            self.ble_status_signal.emit(f"Connection error: {str(e)}", "red")
-            self.connection_state_signal.emit(False)
-            logging.error(f"BLE connection error: {e}")
-        finally:
-            if self.is_connected:
-                await self.disconnect_from_device()
-            if self.db_manager:
-                await self.db_manager.close_pool()
-
-    async def connect_to_device(self):
-        """Connect to the BLE device"""
-        try:
-            self.ble_status_signal.emit("Connecting...", "orange")
-
-            self.client = BleakClient(bleak_probe_receiver_handler_db_async.DEVICE_ADDRESS)
-            await self.client.connect()
-
-            if not self.client.is_connected:
-                self.ble_status_signal.emit("Failed to connect", "red")
-                self.connection_state_signal.emit(False)
-                self.is_connected = False
-                return
-
-            self.is_connected = True
-            self.ble_status_signal.emit("Connected", "green")
-            self.connection_state_signal.emit(True)
-            print("Connected to BLE device.")
-
-            # Start notifications
-            await self.client.start_notify(
-                bleak_probe_receiver_handler_db_async.CHARACTERISTIC_UUID_1,
-                self.notification_handler
-            )
-            print("Started notifications.")
-
-        except Exception as e:
-            self.ble_status_signal.emit(f"Connection failed: {str(e)}", "red")
-            self.connection_state_signal.emit(False)
-            self.is_connected = False
-            logging.error(f"Failed to connect: {e}")
-
-    async def disconnect_from_device(self):
-        """Disconnect from the BLE device"""
-        try:
-            if self.client and self.client.is_connected:
-                self.ble_status_signal.emit("Disconnecting...", "orange")
-
-                # Stop notifications
-                await self.client.stop_notify(
-                    bleak_probe_receiver_handler_db_async.CHARACTERISTIC_UUID_1
-                )
-
-                # Disconnect
-                await self.client.disconnect()
-                print("BLE Client disconnected.")
-
-            self.is_connected = False
-            self.client = None
-            self.ble_status_signal.emit("Disconnected", "red")
-            self.connection_state_signal.emit(False)
-
-        except Exception as e:
-            self.ble_status_signal.emit(f"Disconnect error: {str(e)}", "orange")
-            logging.error(f"Failed to disconnect: {e}")
-            self.is_connected = False
-            self.connection_state_signal.emit(False)
-
-    def stop(self):
-        """Stop the BLE worker thread"""
-        self.running = False
-        self.should_connect = False
-
 
 # --- CUSTOM WIDGETS ---
 
@@ -454,7 +278,8 @@ class ArrowGLWidget(QOpenGLWidget):
         # --- 2. Camera Setup ---
         glLoadIdentity()
         # Fixed isometric camera view (5, -5, 5)
-        gluLookAt(5, -10, 5, 0, 0, 0, 0, 0, 1)
+        gluLookAt(5, -5, 5, 0, 0, 0, 0, 0, 1)
+       # gluLookAt(0, 0, 5, 0, 0, 0, 0, 1, 0)
 
         # --- 3. Draw X, Y, Z axis arrows ---
         self.draw_axis_arrow('x', 2.0, (1, 0, 0))  # Red X
@@ -595,17 +420,6 @@ class UltrasoundViewer(QMainWindow):
         # New state variable: True means DB updates sliders (Live Mode); False means sliders are Manual
         self.is_live_data_mode = False
 
-        # Seperate GUI
-        # # --- BLE Integration Setup ---
-        # # Create BLE worker thread
-        # self.ble_worker = BLEWorkerThread()
-        # self.ble_worker.imu_data_signal.connect(self.handle_imu_data)
-        # self.ble_worker.ble_status_signal.connect(self.handle_ble_status)
-        # self.ble_worker.connection_state_signal.connect(self.handle_connection_state)
-        #
-        # # # Start BLE worker thread (but don't auto-connect)
-        # self.ble_worker.start()
-
         # Add a status label for BLE connection feedback
         self.ble_status_label = None  # Will be created in UI setup
         self.probe_connect_button = None
@@ -711,99 +525,99 @@ class UltrasoundViewer(QMainWindow):
         connection_layout = QVBoxLayout(connection_group)
         connection_layout.setContentsMargins(8, 8, 8, 8)
         connection_layout.setSpacing(6)
+        #
+        # # Connection header
+        # connection_header = QLabel("Probe BLE Connection")
+        # connection_header.setStyleSheet("font-size: 14px; font-weight: 600; color: #3498db; border: none;")
+        # connection_layout.addWidget(connection_header)
+        #
+        # # Status indicator and label container
+        # status_container = QHBoxLayout()
+        # status_container.setSpacing(8)
+        #
+        # # Visual connection indicator (circle)
+        # self.connection_indicator = QLabel("●")
+        # self.connection_indicator.setStyleSheet("""
+        #     QLabel {
+        #         font-size: 20px;
+        #         color: #e74c3c;
+        #         border: none;
+        #         padding: 0;
+        #     }
+        # """)
+        # self.connection_indicator.setFixedWidth(25)
+        # self.connection_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # status_container.addWidget(self.connection_indicator)
+        #
+        # # BLE status label
+        # self.ble_status_label = QLabel("Status: Ready")
+        # self.ble_status_label.setStyleSheet("""
+        #     QLabel {
+        #         font-size: 12px;
+        #         font-weight: bold;
+        #         color: #2c3e50;
+        #         border: none;
+        #         padding: 3px;
+        #     }
+        # """)
+        # status_container.addWidget(self.ble_status_label, stretch=1)
+        #
+        # connection_layout.addLayout(status_container)
 
-        # Connection header
-        connection_header = QLabel("Probe BLE Connection")
-        connection_header.setStyleSheet("font-size: 14px; font-weight: 600; color: #3498db; border: none;")
-        connection_layout.addWidget(connection_header)
-
-        # Status indicator and label container
-        status_container = QHBoxLayout()
-        status_container.setSpacing(8)
-
-        # Visual connection indicator (circle)
-        self.connection_indicator = QLabel("●")
-        self.connection_indicator.setStyleSheet("""
-            QLabel {
-                font-size: 20px;
-                color: #e74c3c;
-                border: none;
-                padding: 0;
-            }
-        """)
-        self.connection_indicator.setFixedWidth(25)
-        self.connection_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        status_container.addWidget(self.connection_indicator)
-
-        # BLE status label
-        self.ble_status_label = QLabel("Status: Ready")
-        self.ble_status_label.setStyleSheet("""
-            QLabel {
-                font-size: 12px;
-                font-weight: bold;
-                color: #2c3e50;
-                border: none;
-                padding: 3px;
-            }
-        """)
-        status_container.addWidget(self.ble_status_label, stretch=1)
-
-        connection_layout.addLayout(status_container)
-
-        # Connection buttons container
-        button_container = QHBoxLayout()
-        button_container.setSpacing(8)
-
-        # Connect button
-        self.probe_connect_button = QPushButton("Connect Probe")
-        self.probe_connect_button.setStyleSheet("""
-            QPushButton {
-                background-color: #27ae60;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 5px;
-                font-size: 13px;
-                font-weight: 600;
-                min-height: 28px;
-            }
-            QPushButton:hover {
-                background-color: #229954;
-            }
-            QPushButton:disabled {
-                background-color: #95a5a6;
-            }
-        """)
-        self.probe_connect_button.clicked.connect(self.connect_probe)
-        button_container.addWidget(self.probe_connect_button)
-
-        # Disconnect button
-        self.probe_disconnect_button = QPushButton("Disconnect")
-        self.probe_disconnect_button.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 5px;
-                font-size: 13px;
-                font-weight: 600;
-                min-height: 28px;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-            QPushButton:disabled {
-                background-color: #95a5a6;
-            }
-        """)
-        self.probe_disconnect_button.clicked.connect(self.disconnect_probe)
-        self.probe_disconnect_button.setEnabled(False)
-        button_container.addWidget(self.probe_disconnect_button)
-
-        connection_layout.addLayout(button_container)
-        control_layout.addWidget(connection_group)
-        control_layout.addSpacing(6)
+        # # Connection buttons container
+        # button_container = QHBoxLayout()
+        # button_container.setSpacing(8)
+        #
+        # # Connect button
+        # self.probe_connect_button = QPushButton("Connect Probe")
+        # self.probe_connect_button.setStyleSheet("""
+        #     QPushButton {
+        #         background-color: #27ae60;
+        #         color: white;
+        #         border: none;
+        #         padding: 6px 12px;
+        #         border-radius: 5px;
+        #         font-size: 13px;
+        #         font-weight: 600;
+        #         min-height: 28px;
+        #     }
+        #     QPushButton:hover {
+        #         background-color: #229954;
+        #     }
+        #     QPushButton:disabled {
+        #         background-color: #95a5a6;
+        #     }
+        # """)
+        # self.probe_connect_button.clicked.connect(self.connect_probe)
+        # button_container.addWidget(self.probe_connect_button)
+        #
+        # # Disconnect button
+        # self.probe_disconnect_button = QPushButton("Disconnect")
+        # self.probe_disconnect_button.setStyleSheet("""
+        #     QPushButton {
+        #         background-color: #e74c3c;
+        #         color: white;
+        #         border: none;
+        #         padding: 6px 12px;
+        #         border-radius: 5px;
+        #         font-size: 13px;
+        #         font-weight: 600;
+        #         min-height: 28px;
+        #     }
+        #     QPushButton:hover {
+        #         background-color: #c0392b;
+        #     }
+        #     QPushButton:disabled {
+        #         background-color: #95a5a6;
+        #     }
+        # """)
+        # self.probe_disconnect_button.clicked.connect(self.disconnect_probe)
+        # self.probe_disconnect_button.setEnabled(False)
+        # button_container.addWidget(self.probe_disconnect_button)
+        #
+        # connection_layout.addLayout(button_container)
+        # control_layout.addWidget(connection_group)
+        # control_layout.addSpacing(6)
 
         # --- LIVE DATA/MANUAL CONTROL TOGGLE ---
         self.live_data_checkbox = QCheckBox("Live Data Control (BLE)")
@@ -908,7 +722,7 @@ class UltrasoundViewer(QMainWindow):
 
         container_yaw, self.slider_yaw = self.add_slider('Yaw (Z-Axis)', -180, 180, self.yaw, 5)
         rotation_group.addWidget(container_yaw)
-        container_pitch, self.slider_pitch = self.add_slider('Pitch (X-Axis)', -45, 45, self.pitch, 1)
+        container_pitch, self.slider_pitch = self.add_slider('Pitch (X-Axis)', -90, 90, self.pitch, 1)
         rotation_group.addWidget(container_pitch)
         container_roll, self.slider_roll = self.add_slider('Roll (Y-Axis)', -90, 90, self.roll, 1)
         rotation_group.addWidget(container_roll)
@@ -1001,9 +815,9 @@ class UltrasoundViewer(QMainWindow):
             self.roll = roll  # Inverted for live mode (was negated before)
 
             # Block signals to prevent triggering update_image
-            self.slider_yaw.blockSignals(True)
-            self.slider_pitch.blockSignals(True)
-            self.slider_roll.blockSignals(True)
+            # self.slider_yaw.blockSignals(True)
+            # self.slider_pitch.blockSignals(True)
+            # self.slider_roll.blockSignals(True)
 
             # Update sliders without triggering valueChanged signal
             self.slider_yaw.setValue(int(yaw))
@@ -1011,9 +825,9 @@ class UltrasoundViewer(QMainWindow):
             self.slider_roll.setValue(int(roll))  # Inverted for live mode
 
             # Unblock signals
-            self.slider_yaw.blockSignals(False)
-            self.slider_pitch.blockSignals(False)
-            self.slider_roll.blockSignals(False)
+            # self.slider_yaw.blockSignals(False)
+            # self.slider_pitch.blockSignals(False)
+            # self.slider_roll.blockSignals(False)
 
             # Update GL widget directly
             self.gl_widget.yaw = self.yaw
@@ -1129,9 +943,9 @@ class UltrasoundViewer(QMainWindow):
         # If Live (True), disable sliders so BLE controls them.
         # If Manual (False), enable sliders so the user controls them.
         is_manual = not self.is_live_data_mode
-        self.slider_yaw.setEnabled(is_manual)
-        self.slider_pitch.setEnabled(is_manual)
-        self.slider_roll.setEnabled(is_manual)
+        # self.slider_yaw.setEnabled(is_manual)
+        # self.slider_pitch.setEnabled(is_manual)
+        # self.slider_roll.setEnabled(is_manual)
 
         # The shift/slice sliders are always controlled by the user, so they remain enabled.
     def fetch_orientation_from_db(self):
@@ -1148,7 +962,7 @@ class UltrasoundViewer(QMainWindow):
         #print("fetch_orientation_from_db")
         # The query and structure are copied directly from main_opengl - hammer.py
         try:
-            result = mysql_interface.db_select(None, 'SELECT roll, pitch, yaw FROM ble_receiver.probe_imu where idx = 1',
+            result = mysql_interface.db_select(None, 'SELECT roll, pitch, yaw_calibrated FROM ble_receiver.probe_imu where idx = 1',
                                                [])
 
           #  result = [{'yaw':0,'pitch':0, "roll":0}]
@@ -1157,14 +971,14 @@ class UltrasoundViewer(QMainWindow):
                 print(f"DB Update: {result[0]}")
 
                 # Update internal state - invert roll and pitch for live mode
-                self.yaw = int(result[0]['yaw'])
+                self.yaw = int(result[0]['yaw_calibrated'])
                 self.pitch = int(-result[0]['pitch'])  # Inverted for live mode
                 self.roll = int(result[0]['roll'])  # Inverted for live mode (was negated before)
 
                 # Block signals to prevent triggering update_image
-                self.slider_yaw.blockSignals(True)
-                self.slider_pitch.blockSignals(True)
-                self.slider_roll.blockSignals(True)
+                # self.slider_yaw.blockSignals(True)
+                # self.slider_pitch.blockSignals(True)
+                # self.slider_roll.blockSignals(True)
 
                 # Update sliders without triggering valueChanged signal
                 self.slider_yaw.setValue(self.yaw)
@@ -1172,9 +986,9 @@ class UltrasoundViewer(QMainWindow):
                 self.slider_roll.setValue(self.roll)
 
                 # Unblock signals
-                self.slider_yaw.blockSignals(False)
-                self.slider_pitch.blockSignals(False)
-                self.slider_roll.blockSignals(False)
+                # self.slider_yaw.blockSignals(False)
+                # self.slider_pitch.blockSignals(False)
+                # self.slider_roll.blockSignals(False)
 
                 # Update GL widget directly
                 self.gl_widget.yaw = self.yaw
@@ -1218,12 +1032,12 @@ class UltrasoundViewer(QMainWindow):
         self.is_slicing_enabled = False
         self.is_live_data_mode = False  # Reset to Manual Mode
 
-        self.slider_z.setValue(self.z_index)
+        #self.slider_z.setValue(self.z_index)
         self.slider_yaw.setValue(0)
         self.slider_pitch.setValue(0)
         self.slider_roll.setValue(0)
-        self.slider_x.setValue(0)
-        self.slider_y.setValue(0)
+        # self.slider_x.setValue(0)
+        # self.slider_y.setValue(0)
 
         self.slicing_checkbox.setChecked(False)
         self.live_data_checkbox.setChecked(False)  # Ensures manual mode is active
