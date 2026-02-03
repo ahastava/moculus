@@ -420,3 +420,108 @@ class CalibrateWorker(QThread):
             logging.info("Continuous calibration started.")
         else:
             logging.info("Continuous calibration stopped.")
+
+
+# ============================================================================
+# TEST FUNCTION
+# ============================================================================
+def test_calibrate_worker():
+    """
+    Test function for CalibrateWorker class.
+
+    Note: This requires:
+    1. PyQt6 QApplication instance
+    2. Valid database connection (config.py with DB_CONFIG)
+    3. IMUState class available
+    4. Database tables: probe_imu, car_imu, probe_imu_history, car_imu_history, calibrated_imu
+    """
+    from PyQt6.QtWidgets import QApplication
+    import sys
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
+    print("=== CalibrateWorker Test ===\n")
+
+    # Create QApplication (required for QThread)
+    app = QApplication(sys.argv)
+
+    # Create worker instance
+    worker = CalibrateWorker()
+
+    # Connect signals to test handlers
+    def on_status(message, color):
+        print(f"[STATUS - {color}] {message}")
+
+    def on_error(error_msg):
+        print(f"[ERROR] {error_msg}")
+
+    def on_reset_complete():
+        print("[SIGNAL] Reset complete!")
+
+    def on_calibration_result(method1, method2):
+        print(f"[CALIBRATION RESULT]")
+        print(f"  Method 1: yaw={method1.yaw:.2f}, pitch={method1.pitch:.2f}, roll={method1.roll:.2f}")
+        print(f"  Method 2: yaw={method2.yaw:.2f}, pitch={method2.pitch:.2f}, roll={method2.roll:.2f}")
+
+    worker.status_signal.connect(on_status)
+    worker.error_signal.connect(on_error)
+    worker.reset_complete_signal.connect(on_reset_complete)
+    worker.calibration_result_signal.connect(on_calibration_result)
+
+    # Start the worker thread
+    worker.start()
+    print("Worker thread started\n")
+
+    # Test database connection
+    print("Testing database connection...")
+    conn = worker._get_db_connection()
+    if conn:
+        print("✓ Database connection successful\n")
+        conn.close()
+    else:
+        print("✗ Database connection failed\n")
+        return
+
+    # Test _wrap180 function
+    print("Testing _wrap180 function:")
+    test_angles = [0, 90, 180, -180, 270, -270, 360, -360]
+    for angle in test_angles:
+        wrapped = worker._wrap180(angle)
+        print(f"  {angle:>5}° -> {wrapped:>6.1f}°")
+    print()
+
+    # Test reset operation
+    print("Requesting reset operation...")
+    worker.request_reset()
+    time.sleep(3)  # Wait for reset to complete
+    print()
+
+    # Test single calibration (without continuous mode)
+    print("Requesting single calibration...")
+    worker.request_calibration()
+    time.sleep(2)  # Wait for calibration
+    print()
+
+    # Test continuous mode
+    print("Testing continuous calibration mode (5 seconds)...")
+    worker.toggle_continuous()  # Start continuous mode
+    worker.request_calibration()
+    time.sleep(5)
+    worker.toggle_continuous()  # Stop continuous mode
+    time.sleep(1)
+    print()
+
+    # Stop worker
+    print("Stopping worker thread...")
+    worker.stop()
+    worker.wait()  # Wait for thread to finish
+    print("Worker thread stopped")
+    print("\n=== Test Complete ===")
+
+
+if __name__ == "__main__":
+    test_calibrate_worker()

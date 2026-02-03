@@ -4,6 +4,8 @@ class IMUState:
         self.pitch = 0.0
         self.yaw = 0.0
 
+        self.status = -1
+
         self.yaw_delta = 0.0
         self.yaw_calibrated = 0.0
 
@@ -15,11 +17,12 @@ class IMUState:
     def calibrate_yaw(self):
         self.yaw_delta = -self.yaw
 
-    def update(self, roll, pitch, yaw, qr=None, qi=None, qj=None, qk=None):
+    def update(self, roll, pitch, yaw, status, qr=None, qi=None, qj=None, qk=None):
         self.roll = roll
         self.pitch = pitch
         self.yaw = yaw
         self.yaw_calibrated = self.wrap_deg_180(yaw + self.yaw_delta)
+        self.status = status
 
         if qr is not None:
             self.quat_r = qr

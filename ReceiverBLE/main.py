@@ -162,8 +162,9 @@ class BaseIMUDisplayPanel(QWidget):
         self.yaw_label_1 = QLabel("Yaw: --")
         self.pitch_label_1 = QLabel("Pitch: --")
         self.roll_label_1 = QLabel("Roll: --")
+        self.status_label_1 = QLabel("Status: --")
 
-        for label in [self.yaw_label_1, self.pitch_label_1, self.roll_label_1]:
+        for label in [self.yaw_label_1, self.pitch_label_1, self.roll_label_1, self.status_label_1]:
             label.setStyleSheet("""
                 QLabel {
                     font-size: 14px;
@@ -443,6 +444,7 @@ class IMUControlPanel(BaseIMUDisplayPanel):
         self.roll_label_1.setText(f"Roll: {imu.roll:.1f}°")
         self.pitch_label_1.setText(f"Pitch: {imu.pitch:.1f}°")
         self.yaw_label_1.setText(f"Yaw: {imu.yaw:.1f}°, calibrated: {imu.yaw_calibrated:.1f}")
+        self.status_label_1.setText(f"Status: {imu.status}")
 
         self.update_count += 1
 
