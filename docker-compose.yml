@@ -8,7 +8,9 @@
 
 services:
   moculus:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
     ports:
       - "8000:8000"
     volumes:

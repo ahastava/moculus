@@ -1,0 +1,68 @@
+# MoCoLUS POCUS Trainer — Docker Image
+# =====================================
+# Multi-stage build: compile deps → slim runtime
+# No Xvfb, VNC, or PyQt6 needed — web UI only.
+#
+# Build:  docker build -f Dockerfile.gpu -t moculus .
+# Run:    docker run --gpus all -p 8000:8000 moculus
+# Or:     docker compose up
+
+# ---------- Stage 1: Builder ----------
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-dev python3-pip \
+    build-essential git && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create venv
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install PyTorch first (large, benefits from cache)
+RUN pip install --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# Install remaining Python deps
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ---------- Stage 2: Runtime ----------
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy venv from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Environment
+ENV KERAS_BACKEND=torch
+ENV CUDA_VISIBLE_DEVICES=0
+ENV PYTHONPATH=/app/src
+ENV WANDB_MODE=offline
+
+WORKDIR /app
+
+# Copy project source
+COPY src/ src/
+COPY static/ static/
+COPY configs/ configs/
+COPY requirements.txt .
+COPY .env .
+
+# Create data/checkpoint directories
+RUN mkdir -p checkpoints data
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD python3.11 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/scenarios')" || exit 1
+
+CMD ["uvicorn", "src.web_server:app", "--host", "0.0.0.0", "--port", "8000"]

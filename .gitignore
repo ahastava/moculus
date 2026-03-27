@@ -1,23 +1,32 @@
-.git/
-*.xml
-*.pyc
-*.iml
-*.pyo
-__pycache__/
-./ReciverBLE/config.py
-./US_Image_Reader/GUI/config.py
-
-# Docker / data artifacts
+# Data & model artifacts
 checkpoints/
-data/training_previews/
-data/*.h5
+data/
 *.h5
 *.pt
 *.tar.gz
 *.egg-info
-notebooks/
+*.npz
 
-# IDE
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE / tooling
 .vscode/
 .idea/
 .claude/
+*.xml
+*.iml
+
+# Legacy hardware code (lives in GitLab repo root)
+POCUS CEWIT GitLab/
+
+# Logs
+*.log
+
+# Notebooks
+notebooks/
+
+# OS
+.DS_Store
