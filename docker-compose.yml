@@ -1,0 +1,28 @@
+# MoCoLUS POCUS Trainer — Docker Compose
+# =======================================
+# Usage:
+#   docker compose up --build        # Build and start
+#   docker compose up -d             # Detached mode
+#   docker compose logs -f           # Follow logs
+#   docker compose down              # Stop
+
+services:
+  moculus:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./checkpoints:/app/checkpoints
+      - ./data:/app/data
+    environment:
+      - KERAS_BACKEND=torch
+      - CUDA_VISIBLE_DEVICES=0
+      - WANDB_MODE=offline
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

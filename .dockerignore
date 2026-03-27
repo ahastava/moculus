@@ -1,0 +1,14 @@
+.git
+.vscode
+__pycache__
+*.pyc
+*.pyo
+notebooks/
+POCUS CEWIT GitLab/
+checkpoints/
+data/training_previews/
+data/*.h5
+*.h5
+*.pt
+*.tar.gz
+*.egg-info

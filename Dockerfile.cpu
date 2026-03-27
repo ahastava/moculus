@@ -1,0 +1,70 @@
+# MoCoLUS POCUS Trainer — CPU-only Docker Image (multi-arch)
+# ==========================================================
+# For running on machines without NVIDIA GPU.
+#
+# Build & push (multi-arch):
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f Dockerfile.cpu -t ahastava/moculus:latest --push \
+#     --build-arg CACHEBUST=$(date +%s) .
+#
+# Run:  docker run -p 8000:8000 ahastava/moculus:latest
+
+# ---------- Stage 1: Builder ----------
+FROM python:3.11-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create venv
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install PyTorch CPU-only (much smaller)
+RUN pip install --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining Python deps
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ---------- Stage 2: Runtime ----------
+FROM python:3.11-slim
+
+# Install tkinter (required by zea's viewer module)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-tk && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy venv from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Environment
+ENV KERAS_BACKEND=torch
+ENV PYTHONPATH=/app/src
+ENV WANDB_MODE=offline
+
+WORKDIR /app
+
+# Cache-bust for source updates
+ARG CACHEBUST=1
+
+# Copy project source
+COPY src/ src/
+COPY static/ static/
+COPY configs/ configs/
+COPY requirements.txt .
+COPY .env .
+
+# Pre-generated frame cache (GPU-rendered, for instant CPU playback)
+COPY data/frame_cache.npz data/
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD python3.11 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/scenarios')" || exit 1
+
+CMD ["uvicorn", "src.web_server:app", "--host", "0.0.0.0", "--port", "8000"]

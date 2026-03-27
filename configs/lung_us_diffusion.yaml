@@ -1,0 +1,53 @@
+# MoCoLUS Lung US Diffusion Model Training Config
+# ThinkStation PX (NVIDIA A/RTX-class GPU, 24GB+ VRAM recommended)
+
+data:
+  train_path: "data/lung_us_moculus_train.h5"
+  val_path: "data/lung_us_moculus_val.h5"
+  image_size: [256, 256]
+  n_classes: 6           # healthy, tension_ptx, a_lines, b_lines, sliding, ards
+
+model:
+  preset: null            # null = train from scratch
+                          # Or use "diffusion-echonet-dynamic" as cardiac starting point
+  unet_channels: [64, 128, 256, 512]
+  unet_attn_resolutions: [16, 8]
+  cond_dim: 128           # conditioning vector dimension
+
+training:
+  batch_size: 8           # Increase to 16 if GPU VRAM > 24GB
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  n_epochs: 200
+  n_diffusion_steps: 1000  # DDPM forward process steps
+  n_inference_steps: 50    # DDIM steps for evaluation/deployment
+  guidance_scale: 3.0      # Classifier-free guidance scale
+  p_uncond: 0.15           # CFG training: 15% unconditional
+  grad_clip: 1.0
+  ema_decay: 0.9999
+  mixed_precision: true    # AMP — essential for ThinkStation performance
+  save_every: 20
+  val_every: 5
+  output_dir: "checkpoints/lung_us_diffusion"
+  device: "cuda"
+
+logging:
+  tensorboard: true
+  wandb: false
+  project: "moculus-lung-us"
+
+# Grid configuration (mirrors hardware)
+grid:
+  n_rows: 8
+  n_cols: 8
+  cell_width_m: 0.025
+  cell_height_m: 0.025
+  probe_aperture_deg: 60.0
+  max_depth_m: 0.12
+
+# IMU simulation parameters for synthetic data
+imu:
+  probe_noise_std: 0.02
+  vehicle_ambulance_std: 0.04
+  vehicle_helicopter_std: 0.08
+  vehicle_static_std: 0.005

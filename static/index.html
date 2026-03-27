@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MoCoLUS — Point-of-Care Lung Ultrasound Simulator</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header id="topbar">
+    <span class="logo">MoCoLUS <span class="logo-sub">Point-of-Care Lung Ultrasound Simulator</span></span>
+    <nav>
+      <button class="tab-btn active" data-tab="simulator">Simulator</button>
+      <button class="tab-btn" data-tab="training">Training Studio</button>
+    </nav>
+    <span id="ws-status" class="status-dot disconnected" title="WebSocket status"></span>
+  </header>
+
+  <!-- ============ SIMULATOR TAB ============ -->
+  <div id="tab-simulator" class="tab-content active">
+    <div class="sim-layout">
+
+      <!-- COL 1: Ultrasound displays -->
+      <div class="sim-col-us">
+        <div class="card display-card">
+          <div class="display-header">
+            <span>B-Mode</span>
+            <span id="frame-counter" class="dim mono">0/32</span>
+          </div>
+          <div id="bmode-wrapper">
+            <canvas id="bmode-canvas" width="512" height="512"></canvas>
+            <div id="freeze-overlay" class="hidden">FROZEN</div>
+          </div>
+          <div class="display-footer">
+            <span id="zone-label" class="accent">Select a zone</span>
+            <span id="sliding-badge" class="hidden"></span>
+          </div>
+        </div>
+
+        <div class="card display-card mmode-card">
+          <div class="display-header">
+            <span>M-Mode</span>
+            <span id="mmode-pattern" class="dim mono">--</span>
+          </div>
+          <div id="mmode-wrapper">
+            <canvas id="mmode-canvas" width="512" height="80"></canvas>
+          </div>
+        </div>
+
+        <div class="playback-bar">
+          <button id="play-btn" class="btn btn-play" title="Play/Pause">&#9654;</button>
+          <input type="range" id="frame-slider" min="0" max="31" value="0" class="frame-slider">
+          <span id="playback-label" class="dim mono">0/32</span>
+        </div>
+      </div>
+
+      <!-- COL 2: Probe overlay -->
+      <div class="sim-col-probe">
+        <div class="card probe-card">
+          <div class="card-title">Probe Position</div>
+          <div class="probe-canvas-wrap">
+            <canvas id="probe-canvas"></canvas>
+          </div>
+          <div class="probe-info">
+            <span id="probe-angle-display">Yaw: 0° Pitch: 0° Roll: 0°</span>
+            <span id="probe-mode-label" class="dim">Manual</span>
+          </div>
+          <div class="probe-controls">
+            <button id="probe-reset-btn" class="btn btn-small">Reset</button>
+          </div>
+          <div id="orientation-sliders" class="orientation-sliders">
+            <div class="slider-row">
+              <label class="slider-label">Yaw (Z)</label>
+              <input type="range" id="yaw-slider" min="-180" max="180" value="0" class="orient-slider">
+              <span id="yaw-value" class="slider-value">0</span>
+            </div>
+            <div class="slider-row">
+              <label class="slider-label">Pitch (X)</label>
+              <input type="range" id="pitch-slider" min="-45" max="45" value="0" class="orient-slider">
+              <span id="pitch-value" class="slider-value">0</span>
+            </div>
+            <div class="slider-row">
+              <label class="slider-label">Roll (Y)</label>
+              <input type="range" id="roll-slider" min="-90" max="90" value="0" class="orient-slider">
+              <span id="roll-value" class="slider-value">0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- COL 3: Controls -->
+      <div class="sim-col-controls">
+        <div class="mode-selector">
+          <button id="mode-practice" class="btn mode-btn active">Practice</button>
+          <button id="mode-test" class="btn mode-btn">Test Me</button>
+        </div>
+
+        <div class="card" id="patient-card">
+          <div class="card-title">Patient</div>
+          <div id="patient-demo" class="dim">--</div>
+          <div id="patient-cc" class="orange">--</div>
+          <div id="patient-hx" class="dim small">--</div>
+          <div id="patient-vitals" class="small">--</div>
+        </div>
+
+        <div class="card" id="scenario-card">
+          <div class="card-title">Scenario</div>
+          <select id="scenario-select" class="select"></select>
+          <div id="scenario-desc" class="dim small" style="margin-top:2px"></div>
+        </div>
+
+        <div class="card" id="zone-card">
+          <div class="card-title">BLUE Protocol Zones <span id="zone-progress" class="dim">0/8</span></div>
+          <div id="chest-zone-map">
+            <svg id="zone-svg" viewBox="0 0 160 190" xmlns="http://www.w3.org/2000/svg">
+              <path d="M80,6 C100,6 122,20 128,40 L132,92 C132,128 122,156 108,174 L80,182 L52,174 C38,156 28,128 28,92 L32,40 C38,20 60,6 80,6 Z"
+                    fill="none" stroke="#243040" stroke-width="1"/>
+              <line x1="80" y1="12" x2="80" y2="170" stroke="#1a2535" stroke-width="0.7" stroke-dasharray="3,3"/>
+              <text x="16" y="100" class="side-label">R</text>
+              <text x="140" y="100" class="side-label">L</text>
+            </svg>
+          </div>
+        </div>
+
+        <div class="card" id="findings-card">
+          <div class="card-title">Zone Findings</div>
+          <div id="finding-zone" class="bold">--</div>
+          <div id="finding-pathology" class="orange">--</div>
+          <div id="finding-sliding">--</div>
+          <div id="finding-mmode">--</div>
+        </div>
+
+        <div class="card hidden" id="diagnosis-card">
+          <div class="card-title">Diagnosis</div>
+          <select id="diagnosis-select" class="select">
+            <option value="">-- Select diagnosis --</option>
+          </select>
+          <div class="btn-row">
+            <button id="submit-diagnosis-btn" class="btn btn-success">Submit</button>
+            <button id="reveal-btn" class="btn btn-warning">Reveal</button>
+          </div>
+          <div id="diagnosis-result"></div>
+        </div>
+
+        <div class="btn-row">
+          <button id="new-case-btn" class="btn btn-primary">New Case</button>
+          <button id="freeze-btn" class="btn btn-caution">Freeze</button>
+        </div>
+
+        <div class="card" id="ble-card">
+          <div class="card-title">Probe Connection</div>
+          <div class="ble-row">
+            <button id="ble-connect-btn" class="btn btn-small">Connect Probe</button>
+            <button id="ble-calibrate-btn" class="btn btn-small" disabled>Calibrate Yaw</button>
+          </div>
+          <div id="ble-status" class="dim small">Not connected</div>
+          <div id="ble-imu" class="dim small mono">Y: -- P: -- R: --</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ TRAINING STUDIO TAB ============ -->
+  <div id="tab-training" class="tab-content">
+    <div id="training-content"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

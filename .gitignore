@@ -2,5 +2,22 @@
 *.xml
 *.pyc
 *.iml
+*.pyo
+__pycache__/
 ./ReciverBLE/config.py
 ./US_Image_Reader/GUI/config.py
+
+# Docker / data artifacts
+checkpoints/
+data/training_previews/
+data/*.h5
+*.h5
+*.pt
+*.tar.gz
+*.egg-info
+notebooks/
+
+# IDE
+.vscode/
+.idea/
+.claude/
