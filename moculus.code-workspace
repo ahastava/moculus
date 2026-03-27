@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"python.defaultInterpreterPath": "~/moculus_env/bin/python",
+		"terminal.integrated.env.linux": {
+			"KERAS_BACKEND": "torch",
+			"PYTHONPATH": "${workspaceFolder}/src"
+		},
+		"remote.autoForwardPorts": true
+	}
+}

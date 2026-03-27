@@ -1,4 +1,0 @@
-{
-    "board": "arduino:mbed_nano:nano33ble",
-    "port": "/dev/tty.usbmodem14201"
-}
