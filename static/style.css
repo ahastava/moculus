@@ -3,21 +3,21 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg:       #0b0f14;
-  --bg2:      #111820;
-  --bg3:      #182030;
-  --border:   #243040;
-  --accent:   #5a9ec0;
-  --accent-h: #7ab8d6;
-  --green:    #4caf7a;
-  --red:      #d4534b;
-  --orange:   #d4923a;
-  --yellow:   #c4b040;
-  --purple:   #9a8ac0;
-  --dim:      #607080;
-  --muted:    #3a4a58;
-  --text:     #c0ccd8;
-  --text-h:   #e0e8f0;
+  --bg:       #0e1318;
+  --bg2:      #151d28;
+  --bg3:      #1e2a3a;
+  --border:   #334455;
+  --accent:   #6ab0d8;
+  --accent-h: #8cc8ee;
+  --green:    #5cc88a;
+  --red:      #e05a52;
+  --orange:   #e0a040;
+  --yellow:   #d4c04a;
+  --purple:   #a898d0;
+  --dim:      #8898a8;
+  --muted:    #4a5a6a;
+  --text:     #d8e0ea;
+  --text-h:   #f0f4f8;
   --font:     'Inter', -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'SF Mono', 'Consolas', 'Monaco', monospace;
 }
@@ -295,7 +295,7 @@ body {
   cursor: pointer;
 }
 
-/* ========== PROBE OVERLAY — hero panel ========== */
+/* ========== PROBE OVERLAY — chest map + 3D overlay ========== */
 
 .probe-card {
   flex: 1;
@@ -305,13 +305,27 @@ body {
 }
 
 .probe-canvas-wrap {
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 0;
+  min-height: 200px;
   position: relative;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 2px;
   overflow: hidden;
+}
+
+.probe3d-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.probe3d-overlay canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 #probe-canvas {

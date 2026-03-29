@@ -1,14 +1,35 @@
 .git
+.github
 .vscode
+.idea
+.claude
+
+# Python bytecode
 __pycache__
 *.pyc
 *.pyo
+*.egg-info
+
+# Legacy / dev-only
 notebooks/
 POCUS CEWIT GitLab/
+setup_remote_dev.sh
+moculus.code-workspace
+
+# Large artifacts (mount or download at runtime)
 checkpoints/
 data/training_previews/
-data/*.h5
+data/real_pocus/
 *.h5
 *.pt
+*.safetensors
 *.tar.gz
-*.egg-info
+*.npz
+
+# Generated outputs
+*.pdf
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

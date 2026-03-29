@@ -6,11 +6,14 @@ data/
 *.tar.gz
 *.egg-info
 *.npz
+*.safetensors
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg
+dist-pkg/
 
 # IDE / tooling
 .vscode/
@@ -25,8 +28,13 @@ POCUS CEWIT GitLab/
 # Logs
 *.log
 
+# Generated outputs
+*.pdf
+moculus_pathology_collage.png
+
 # Notebooks
 notebooks/
 
 # OS
 .DS_Store
+Thumbs.db

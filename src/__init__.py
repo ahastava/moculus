@@ -38,4 +38,3 @@ from .clinical_frames import (
     ClinicalPathology,
     CLINICAL_SCENARIOS,
 )
-from .training_preview import TrainingPreviewRenderer

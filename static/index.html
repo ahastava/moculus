@@ -54,19 +54,17 @@
         </div>
       </div>
 
-      <!-- COL 2: Probe overlay -->
+      <!-- COL 2: Probe 3D on chest overlay (single panel) -->
       <div class="sim-col-probe">
         <div class="card probe-card">
           <div class="card-title">Probe Position</div>
           <div class="probe-canvas-wrap">
             <canvas id="probe-canvas"></canvas>
+            <div id="probe3d-container" class="probe3d-overlay"></div>
           </div>
           <div class="probe-info">
             <span id="probe-angle-display">Yaw: 0° Pitch: 0° Roll: 0°</span>
             <span id="probe-mode-label" class="dim">Manual</span>
-          </div>
-          <div class="probe-controls">
-            <button id="probe-reset-btn" class="btn btn-small">Reset</button>
           </div>
           <div id="orientation-sliders" class="orientation-sliders">
             <div class="slider-row">
@@ -84,6 +82,9 @@
               <input type="range" id="roll-slider" min="-90" max="90" value="0" class="orient-slider">
               <span id="roll-value" class="slider-value">0</span>
             </div>
+          </div>
+          <div class="probe-controls">
+            <button id="probe-reset-btn" class="btn btn-small">Reset</button>
           </div>
         </div>
       </div>
@@ -165,6 +166,8 @@
     <div id="training-content"></div>
   </div>
 
+  <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+  <script type="module" src="/static/probe3d.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -578,16 +578,16 @@ class ClinicalFrameGenerator:
 
         return image
 
-    def _log_compress(self, image: np.ndarray, dynamic_range_db: float = 55.0) -> np.ndarray:
+    def _log_compress(self, image: np.ndarray, dynamic_range_db: float = 50.0) -> np.ndarray:
         """Log compression with clinical-grade dynamic range and contrast."""
         image = np.clip(image, 1e-6, None)
         image_db = 20 * np.log10(image / (image.max() + 1e-10))
         image_db = np.clip(image_db, -dynamic_range_db, 0)
         compressed = (image_db + dynamic_range_db) / dynamic_range_db
-        # Mild gamma to lift midtones (typical US display curve)
-        compressed = np.power(compressed, 0.85).astype(np.float32)
+        # Gamma to lift midtones — matches clinical US display curve
+        compressed = np.power(compressed, 0.78).astype(np.float32)
         # Light smoothing for clean appearance
-        compressed = gaussian_filter(compressed, sigma=0.35)
+        compressed = gaussian_filter(compressed, sigma=0.3)
         return compressed
 
     # ------------------------------------------------------------------
@@ -598,10 +598,18 @@ class ClinicalFrameGenerator:
         """
         Normal lung: A-lines + lung sliding.
         BLUE protocol A-profile (bilateral) = no pulmonary edema.
+        Sub-pleural region has granular texture from sliding lung parenchyma.
         """
         image = self._generate_tissue_texture(rng)
-        image = self._draw_pleural_line(image, rng)
-        image = self._draw_a_lines(image, n_reverberations=4, base_intensity=0.6)
+        image = self._draw_pleural_line(image, rng, intensity=0.9, thickness_px=2)
+        image = self._draw_a_lines(image, n_reverberations=3, base_intensity=0.5)
+        # Normal: sub-pleural has visible granular texture (aerated lung + sliding)
+        sub_start = self.pleural_row + 3
+        if sub_start < self.H:
+            n_sub = self.H - sub_start
+            granular = rng.rayleigh(0.12, (n_sub, self.W))
+            granular = gaussian_filter(granular, sigma=[1.2, 1.5])
+            image[sub_start:] += granular
         image = self._add_rib_shadows(image, rng)
         image = self._apply_depth_attenuation(image)
         image = self._apply_speckle_noise(image, rng)
@@ -610,13 +618,22 @@ class ClinicalFrameGenerator:
     def generate_pneumothorax(self, rng: np.random.Generator) -> np.ndarray:
         """
         Pneumothorax: A-lines, NO lung sliding (absent on M-mode = stratosphere).
-        Strong, crisp A-lines due to highly reflective air-pleura interface.
+        Key visual differences from normal:
+          - Very bright, thick pleural line (air-tissue interface is highly reflective)
+          - Strong, crisp, numerous A-lines (repeated reverberations in trapped air)
+          - Sub-pleural region is dark/empty — no granular texture (no sliding parenchyma)
+          - A-lines appear sharper/brighter than normal
         """
         image = self._generate_tissue_texture(rng)
-        image = self._draw_pleural_line(image, rng, intensity=1.0)
-        # Stronger A-lines in pneumothorax (more reflective air interface)
-        image = self._draw_a_lines(image, n_reverberations=5, base_intensity=0.8)
+        # Very bright, thick pleural line
+        image = self._draw_pleural_line(image, rng, intensity=1.0, thickness_px=5)
+        # Strong, numerous A-lines
+        image = self._draw_a_lines(image, n_reverberations=6, base_intensity=0.95)
         image = self._add_rib_shadows(image, rng)
+        # Dark sub-pleural region — trapped air = no parenchymal texture
+        sub_start = self.pleural_row + 6
+        if sub_start < self.H:
+            image[sub_start:] *= 0.55  # significantly darker between A-lines
         image = self._apply_depth_attenuation(image)
         image = self._apply_speckle_noise(image, rng)
         return self._log_compress(image)
@@ -824,7 +841,7 @@ class ClinicalTemporalStack:
         self.gen = frame_gen or ClinicalFrameGenerator()
         self.n_frames = n_frames
         self.fps = fps
-        self.sliding_amp = sliding_amplitude_px
+        self.sliding_amp = max(sliding_amplitude_px, 4.0)  # minimum 4px for visible seashore
         self.resp_rate = respiratory_rate_hz
 
     def generate_stack(
@@ -860,24 +877,28 @@ class ClinicalTemporalStack:
         # M-mode extraction (center column over time)
         mmode = stack[:, :, W // 2].T  # [H, n_frames]
 
-        # Classify M-mode
-        mmode_pattern = self._classify_mmode(mmode, H)
+        # M-mode pattern is determined by sliding state (ground truth),
+        # not heuristic classification which is unreliable on synthetic data
+        mmode_pattern = "seashore" if lung_sliding else "stratosphere"
 
         return {
             "bmode_stack": stack,
             "mmode": mmode.astype(np.float32),
             "mmode_pattern": mmode_pattern,
+            "lung_sliding": lung_sliding,
         }
 
     def _apply_sliding(self, frame: np.ndarray, t: float, H: int, W: int) -> np.ndarray:
-        """Apply lung sliding motion to sub-pleural rows."""
+        """Apply lung sliding motion to sub-pleural rows.
+        Sliding produces lateral shimmering below the pleural line,
+        creating the seashore sign on M-mode (granular sub-pleural pattern)."""
         import math
         pleural_row = self.gen.pleural_row
         shift = self.sliding_amp * math.sin(2 * math.pi * self.resp_rate * t)
 
         result = frame.copy()
         for row in range(pleural_row, H):
-            depth_factor = 1.0 + 0.3 * ((row - pleural_row) / max(1, H - pleural_row))
+            depth_factor = 1.0 + 0.5 * ((row - pleural_row) / max(1, H - pleural_row))
             row_shift = shift * depth_factor
             int_shift = int(math.floor(row_shift))
             frac = row_shift - int_shift
@@ -886,6 +907,8 @@ class ClinicalTemporalStack:
                     (1 - frac) * np.roll(frame[row], int_shift) +
                     frac * np.roll(frame[row], int_shift + (1 if row_shift >= 0 else -1))
                 )
+            # Add subtle intensity modulation for granular M-mode texture
+            result[row] *= (1.0 + 0.06 * math.sin(2 * math.pi * 3.5 * t + row * 0.05))
         return result
 
     def _apply_breathing(self, frame: np.ndarray, t: float, H: int, W: int) -> np.ndarray:
@@ -902,14 +925,16 @@ class ClinicalTemporalStack:
         return frame
 
     def _classify_mmode(self, mmode: np.ndarray, H: int) -> str:
-        """Classify M-mode as seashore or stratosphere."""
+        """Classify M-mode as seashore or stratosphere.
+        Seashore: sub-pleural region has higher temporal variance (granular).
+        Stratosphere: uniform horizontal lines throughout (no sliding)."""
         pleural_row = self.gen.pleural_row
         sub_pleural = mmode[pleural_row:pleural_row + int(H * 0.3), :]
         supra_pleural = mmode[:pleural_row, :]
         temporal_var = np.var(sub_pleural, axis=1).mean()
         supra_var = np.var(supra_pleural, axis=1).mean()
         ratio = temporal_var / (supra_var + 1e-8)
-        return "seashore" if ratio > 1.5 else "stratosphere"
+        return "seashore" if ratio > 1.1 else "stratosphere"
 
 
 # ---------------------------------------------------------------------------

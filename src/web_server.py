@@ -521,6 +521,15 @@ async def simulator_ws(websocket: WebSocket):
                 session.imu_yaw = float(msg.get("yaw", 0))
                 session.imu_pitch = float(msg.get("pitch", 0))
                 session.imu_roll = float(msg.get("roll", 0))
+                # Push updated frame so B-mode/M-mode reflect orientation in real-time
+                if not session.playing and not session.frozen:
+                    data = session.get_interpolated_frame_data(
+                        session.probe_nx, session.probe_ny
+                    )
+                    if not data:
+                        data = session.get_frame_data()
+                    if data:
+                        await websocket.send_json(data)
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
@@ -601,22 +610,9 @@ async def start_training(req: TrainRequest):
         _jobs[job_id] = job
 
     def _run_training():
-        try:
-            from .train_zea_diffusion import ZeaDiffusionTrainer
-            trainer = ZeaDiffusionTrainer(
-                image_size=req.image_size,
-                n_per_class=req.n_per_class,
-                batch_size=req.batch_size,
-                n_epochs=req.epochs,
-                use_pretrained=not req.from_scratch,
-                resume_path=req.resume_path,
-            )
-            trainer.train(progress_callback=lambda info: job["progress"].append(info))
-            job["status"] = "completed"
-        except Exception as e:
-            job["status"] = "failed"
-            job["error"] = str(e)
-            logger.error(f"Training job {job_id} failed: {e}")
+        job["status"] = "failed"
+        job["error"] = "Training pipeline removed — new LoRA+ControlNet pipeline pending"
+        logger.info(f"Training job {job_id}: old pipeline removed")
 
     loop = asyncio.get_event_loop()
     loop.run_in_executor(_executor, _run_training)
@@ -743,31 +739,10 @@ class PreviewRequest(BaseModel):
 
 @app.post("/api/preview")
 async def generate_preview(req: PreviewRequest):
-    def _render():
-        from .training_preview import TrainingPreviewRenderer
-        import matplotlib
-        matplotlib.use("Agg")
-        renderer = TrainingPreviewRenderer()
-        out_dir = _root / "data" / "training_previews"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        if req.type == "grid":
-            path = out_dir / "pathology_grid.png"
-            renderer.render_comparison_grid(str(path))
-        elif req.type == "scenario" and req.scenario:
-            path = out_dir / f"scenario_{req.scenario}.png"
-            renderer.render_scenario(req.scenario, str(path))
-        elif req.type == "bmode_mmode":
-            path = out_dir / "bmode_mmode_grid.png"
-            renderer.render_bmode_mmode_grid(str(path))
-        else:
-            path = out_dir / "pathology_grid.png"
-            renderer.render_comparison_grid(str(path))
-        return str(path)
-
-    loop = asyncio.get_event_loop()
-    path = await loop.run_in_executor(_executor, _render)
-    return FileResponse(path, media_type="image/png")
+    return JSONResponse(
+        status_code=501,
+        content={"error": "Preview renderer removed — new pipeline pending"},
+    )
 
 
 # ---------------------------------------------------------------------------

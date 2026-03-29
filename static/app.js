@@ -111,8 +111,8 @@ class BmodeRenderer {
       ctx.restore();
 
       // Sector outline (curvilinear probe shape)
-      ctx.strokeStyle = "rgba(90, 158, 192, 0.5)";
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(120, 180, 220, 0.7)";
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       const ti = iw * 0.12;
       ctx.moveTo(m.l + ti, m.t);
@@ -123,8 +123,8 @@ class BmodeRenderer {
       ctx.stroke();
 
       // Depth markers
-      ctx.fillStyle = "#506070";
-      ctx.font = "9px 'SF Mono', Consolas, monospace";
+      ctx.fillStyle = "#8898a8";
+      ctx.font = "10px 'SF Mono', Consolas, monospace";
       ctx.textAlign = "right";
       for (let d = 0; d <= 12; d += 2) {
         const y = m.t + (d / 12) * ih;
@@ -307,23 +307,31 @@ class ProbeOverlayRenderer {
     this._drawDiaphragm(ctx, cx, bw, top, bodyH);
     this._drawZoneMarkers(ctx, w, h);
 
-    // Probe + beam + slice — drawn at free position
+    // Probe position indicator (small crosshair — 3D probe is in WebGL overlay)
     if (this.probeVisible) {
       const px = this._zx(this.probeNx, w);
       const py = this._zy(this.probeNy, h);
-      this._drawBeamFan(ctx, px, py, h, bw);
-      this._drawCrossSectionSlice(ctx, px, py, h, cx, bw, top, bodyH);
-      this._drawProbe(ctx, px, py, bw);
+      ctx.strokeStyle = "rgba(255, 128, 48, 0.6)";
+      ctx.lineWidth = 1.5;
+      const cs = 8;
+      ctx.beginPath();
+      ctx.moveTo(px - cs, py); ctx.lineTo(px + cs, py);
+      ctx.moveTo(px, py - cs); ctx.lineTo(px, py + cs);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255, 128, 48, 0.8)";
+      ctx.fill();
     }
 
     // Side labels
-    ctx.fillStyle = "#3a4a58";
-    ctx.font = `${Math.max(9, w * 0.032)}px Inter, sans-serif`;
+    ctx.fillStyle = "#7090a8";
+    ctx.font = `bold ${Math.max(11, w * 0.038)}px Inter, sans-serif`;
     ctx.textAlign = "center";
     ctx.fillText("R", 10, h * 0.48);
     ctx.fillText("L", w - 10, h * 0.48);
-    ctx.fillStyle = "#405060";
-    ctx.font = "8px Inter, sans-serif";
+    ctx.fillStyle = "#607888";
+    ctx.font = "9px Inter, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText("Anterior view", 6, h - 4);
 
@@ -346,14 +354,14 @@ class ProbeOverlayRenderer {
     ctx.closePath();
     ctx.fillStyle = "#0c1219";
     ctx.fill();
-    ctx.strokeStyle = "#243040";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "#4a6a80";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   }
 
   _drawLungFields(ctx, cx, bw, top, bodyH) {
     // Semi-transparent lung fields showing aerated lung tissue
-    const lungAlpha = 0.08;
+    const lungAlpha = 0.18;
 
     // Left lung (viewer's right)
     ctx.beginPath();
@@ -365,8 +373,8 @@ class ProbeOverlayRenderer {
     ctx.closePath();
     ctx.fillStyle = `rgba(70, 130, 160, ${lungAlpha})`;
     ctx.fill();
-    ctx.strokeStyle = "rgba(70, 130, 160, 0.12)";
-    ctx.lineWidth = 0.6;
+    ctx.strokeStyle = "rgba(90, 160, 200, 0.35)";
+    ctx.lineWidth = 1.0;
     ctx.stroke();
 
     // Right lung (viewer's left)
@@ -379,13 +387,13 @@ class ProbeOverlayRenderer {
     ctx.closePath();
     ctx.fillStyle = `rgba(70, 130, 160, ${lungAlpha})`;
     ctx.fill();
-    ctx.strokeStyle = "rgba(70, 130, 160, 0.12)";
-    ctx.lineWidth = 0.6;
+    ctx.strokeStyle = "rgba(90, 160, 200, 0.35)";
+    ctx.lineWidth = 1.0;
     ctx.stroke();
 
     // Lung labels
-    ctx.fillStyle = "rgba(70, 130, 160, 0.2)";
-    ctx.font = "8px Inter, sans-serif";
+    ctx.fillStyle = "rgba(90, 160, 200, 0.45)";
+    ctx.font = "9px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("L lung", cx + bw * 0.45, top + bodyH * 0.38);
     ctx.fillText("R lung", cx - bw * 0.45, top + bodyH * 0.38);
@@ -393,8 +401,8 @@ class ProbeOverlayRenderer {
 
   _drawSpine(ctx, cx, top, bodyH) {
     // Vertebral bodies as small rounded rectangles
-    ctx.fillStyle = "rgba(40, 60, 80, 0.15)";
-    ctx.strokeStyle = "rgba(40, 60, 80, 0.12)";
+    ctx.fillStyle = "rgba(60, 90, 120, 0.3)";
+    ctx.strokeStyle = "rgba(60, 90, 120, 0.25)";
     ctx.lineWidth = 0.4;
     const vw = 6, vh = 5;
     for (let i = 0; i < 12; i++) {
@@ -408,8 +416,8 @@ class ProbeOverlayRenderer {
 
   _drawSternum(ctx, cx, bw, top, bodyH) {
     // Manubrium
-    ctx.fillStyle = "rgba(50, 70, 90, 0.2)";
-    ctx.strokeStyle = "rgba(50, 70, 90, 0.15)";
+    ctx.fillStyle = "rgba(70, 100, 130, 0.35)";
+    ctx.strokeStyle = "rgba(70, 100, 130, 0.3)";
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     ctx.moveTo(cx - bw * 0.08, top + bodyH * 0.04);
@@ -442,8 +450,8 @@ class ProbeOverlayRenderer {
 
   _drawRibs(ctx, cx, bw, top, bodyH, w) {
     // 12 rib pairs with proper curvature and ICS numbering
-    const ribColor = "rgba(60, 85, 110, 0.22)";
-    const ribStroke = "rgba(60, 85, 110, 0.30)";
+    const ribColor = "rgba(80, 115, 145, 0.35)";
+    const ribStroke = "rgba(80, 115, 145, 0.50)";
 
     for (let i = 1; i <= 10; i++) {
       const frac = 0.06 + i * 0.058;
@@ -469,7 +477,7 @@ class ProbeOverlayRenderer {
 
       // ICS number labels (only for visible ones)
       if (i <= 7 && i >= 2) {
-        ctx.fillStyle = "rgba(80, 110, 140, 0.22)";
+        ctx.fillStyle = "rgba(100, 140, 175, 0.45)";
         ctx.font = "7px Inter, sans-serif";
         ctx.textAlign = "right";
         ctx.fillText(`${i}`, cx - bw * 0.08, ry + 3);
@@ -477,7 +485,7 @@ class ProbeOverlayRenderer {
     }
 
     // Costal cartilage connections (ribs 1-7 to sternum)
-    ctx.strokeStyle = "rgba(50, 75, 100, 0.10)";
+    ctx.strokeStyle = "rgba(70, 100, 130, 0.25)";
     ctx.lineWidth = 0.4;
     for (let i = 1; i <= 7; i++) {
       const ry = top + bodyH * (0.06 + i * 0.058);
@@ -494,8 +502,8 @@ class ProbeOverlayRenderer {
 
   _drawDiaphragm(ctx, cx, bw, top, bodyH) {
     // Diaphragm dome
-    ctx.strokeStyle = "rgba(160, 120, 80, 0.25)";
-    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = "rgba(200, 150, 90, 0.5)";
+    ctx.lineWidth = 1.8;
     ctx.setLineDash([3, 2]);
 
     // Right dome (slightly higher)
@@ -512,8 +520,8 @@ class ProbeOverlayRenderer {
     ctx.setLineDash([]);
 
     // Label
-    ctx.fillStyle = "rgba(160, 120, 80, 0.2)";
-    ctx.font = "7px Inter, sans-serif";
+    ctx.fillStyle = "rgba(200, 150, 90, 0.5)";
+    ctx.font = "8px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("diaphragm", cx, top + bodyH * 0.76);
   }
@@ -566,199 +574,252 @@ class ProbeOverlayRenderer {
   _drawProbe(ctx, px, py, bw) {
     ctx.save();
     ctx.translate(px, py);
-    ctx.rotate(this.yaw * Math.PI / 180);
 
-    // Scale: probe size relative to body width
-    const scale = Math.max(0.7, bw * 0.006);
-    const pitchTilt = this.pitch * Math.PI / 180;
+    // --- 3D projection helpers ---
+    // Convert pitch/roll/yaw to radians
+    const yawR = this.yaw * Math.PI / 180;
+    const pitchR = this.pitch * Math.PI / 180;
+    const rollR = this.roll * Math.PI / 180;
 
-    // 3D wedge-shaped ultrasound transducer (like curvilinear probe from side)
-    // Dimensions of the probe wedge
-    const headW = 38 * scale;   // wide scanning face
-    const headH = 10 * scale;   // face thickness
-    const bodyW = 22 * scale;   // narrower body
-    const bodyH = 40 * scale;   // body height
-    const handleW = 14 * scale; // handle width
-    const handleH = 22 * scale; // handle length
+    // Scale probe to be large and prominent (~40% of body width)
+    const S = Math.max(1.8, bw * 0.016);
 
-    // Perspective foreshortening from pitch
-    const pf = 1.0 - Math.abs(pitchTilt) * 0.15;
+    // 3D rotation matrix (simplified for canvas 2D projection)
+    // We project 3D points (x,y,z) onto screen (sx,sy)
+    const cosY = Math.cos(yawR), sinY = Math.sin(yawR);
+    const cosP = Math.cos(pitchR), sinP = Math.sin(pitchR);
+    const cosR = Math.cos(rollR), sinR = Math.sin(rollR);
 
-    // --- Drop shadow ---
-    ctx.fillStyle = "rgba(0,0,0,0.30)";
-    ctx.beginPath();
-    ctx.moveTo(-headW / 2 + 3, bodyH * 0.5 + 3);
-    ctx.lineTo(headW / 2 + 3, bodyH * 0.5 + 3);
-    ctx.lineTo(bodyW / 2 + 3, -bodyH * 0.1 + 3);
-    ctx.lineTo(handleW / 2 + 3, -bodyH * 0.1 - handleH * 0.5 + 3);
-    ctx.lineTo(-handleW / 2 + 3, -bodyH * 0.1 - handleH * 0.5 + 3);
-    ctx.lineTo(-bodyW / 2 + 3, -bodyH * 0.1 + 3);
-    ctx.closePath();
-    ctx.fill();
+    // Combined rotation: Yaw(Z) * Pitch(X) * Roll(Y)
+    function project3D(x, y, z) {
+      // Roll (around Y-axis)
+      let x1 = x * cosR + z * sinR;
+      let y1 = y;
+      let z1 = -x * sinR + z * cosR;
+      // Pitch (around X-axis)
+      let x2 = x1;
+      let y2 = y1 * cosP - z1 * sinP;
+      let z2 = y1 * sinP + z1 * cosP;
+      // Yaw (around Z-axis)
+      let x3 = x2 * cosY - y2 * sinY;
+      let y3 = x2 * sinY + y2 * cosY;
+      let z3 = z2;
+      // Perspective projection (mild)
+      const persp = 1.0 + z3 * 0.0015;
+      return { x: x3 * persp * S, y: y3 * persp * S, z: z3 };
+    }
+
+    // Draw a 3D polygon given array of [x,y,z] points
+    function drawPoly(pts, fill, stroke, lw) {
+      const projected = pts.map(p => project3D(p[0], p[1], p[2]));
+      ctx.beginPath();
+      ctx.moveTo(projected[0].x, projected[0].y);
+      for (let i = 1; i < projected.length; i++) ctx.lineTo(projected[i].x, projected[i].y);
+      ctx.closePath();
+      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+      if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 1; ctx.stroke(); }
+    }
+
+    // --- Probe geometry in 3D local coords ---
+    // Probe points upward (negative Y = up on screen before rotation)
+    // Handle top, body, and scanning face
+    const hw = 8;    // handle half-width
+    const hh = 35;   // handle height
+    const bwp = 14;  // body half-width at shoulder
+    const faceW = 26; // face half-width
+    const bodyLen = 30; // body length
+    const faceD = 6;  // face depth/curvature
+    const thick = 12; // probe thickness (Z-axis)
+
+    // --- Drop shadow (offset, darker) ---
+    ctx.save();
+    ctx.translate(4 * S, 4 * S);
+    ctx.globalAlpha = 0.25;
+    const shadowPts = [
+      [-hw, -hh - bodyLen, 0], [hw, -hh - bodyLen, 0],
+      [bwp, -bodyLen, 0], [faceW, 0, 0],
+      [-faceW, 0, 0], [-bwp, -bodyLen, 0]
+    ];
+    drawPoly(shadowPts, "#000", null);
+    ctx.globalAlpha = 1.0;
+    ctx.restore();
 
     // --- Selection glow ---
-    ctx.shadowColor = "rgba(90, 158, 192, 0.45)";
-    ctx.shadowBlur = 18 * scale;
+    ctx.shadowColor = "rgba(90, 158, 192, 0.5)";
+    ctx.shadowBlur = 20 * S;
 
-    // --- Probe body (3D wedge shape) ---
-    // Main body gradient for 3D look
-    const bodyGrad = ctx.createLinearGradient(-headW / 2, 0, headW / 2, 0);
-    bodyGrad.addColorStop(0, "#1e2e3e");
-    bodyGrad.addColorStop(0.3, "#3a5568");
-    bodyGrad.addColorStop(0.5, "#4a6578");
-    bodyGrad.addColorStop(0.7, "#3a5568");
-    bodyGrad.addColorStop(1, "#1e2e3e");
+    // --- Compute face normal for lighting ---
+    const faceNorm = project3D(0, 0, 1);
+    const lightFactor = 0.5 + 0.5 * Math.max(0, faceNorm.z / S);  // 0-1 lighting
 
-    // Handle
-    ctx.fillStyle = bodyGrad;
-    ctx.strokeStyle = "#5a8098";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(-handleW / 2, -bodyH * 0.1 - handleH * pf);
-    ctx.lineTo(handleW / 2, -bodyH * 0.1 - handleH * pf);
-    ctx.lineTo(bodyW / 2, -bodyH * 0.1);
-    ctx.lineTo(-bodyW / 2, -bodyH * 0.1);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    // --- Back face (Z = -thick/2) — drawn first ---
+    const backZ = -thick / 2;
+    const backPts = [
+      [-hw, -hh - bodyLen, backZ], [hw, -hh - bodyLen, backZ],
+      [bwp, -bodyLen, backZ], [faceW, 0, backZ],
+      [-faceW, 0, backZ], [-bwp, -bodyLen, backZ]
+    ];
+    drawPoly(backPts, "#1a2835", "#2a4050", 1);
     ctx.shadowBlur = 0;
 
-    // Body (tapers from handle to wide head)
-    const bodyGrad2 = ctx.createLinearGradient(-headW / 2, 0, headW / 2, 0);
-    bodyGrad2.addColorStop(0, "#253545");
-    bodyGrad2.addColorStop(0.3, "#405e72");
-    bodyGrad2.addColorStop(0.5, "#506e82");
-    bodyGrad2.addColorStop(0.7, "#405e72");
-    bodyGrad2.addColorStop(1, "#253545");
-    ctx.fillStyle = bodyGrad2;
-    ctx.beginPath();
-    ctx.moveTo(-bodyW / 2, -bodyH * 0.1);
-    ctx.lineTo(bodyW / 2, -bodyH * 0.1);
-    ctx.lineTo(headW / 2, bodyH * 0.38);
-    ctx.lineTo(-headW / 2, bodyH * 0.38);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "#5a8098";
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
+    // --- Side faces (connect front and back) ---
+    const frontZ = thick / 2;
+    const frontPtsRaw = [
+      [-hw, -hh - bodyLen, frontZ], [hw, -hh - bodyLen, frontZ],
+      [bwp, -bodyLen, frontZ], [faceW, 0, frontZ],
+      [-faceW, 0, frontZ], [-bwp, -bodyLen, frontZ]
+    ];
+    const backPtsRaw = [
+      [-hw, -hh - bodyLen, backZ], [hw, -hh - bodyLen, backZ],
+      [bwp, -bodyLen, backZ], [faceW, 0, backZ],
+      [-faceW, 0, backZ], [-bwp, -bodyLen, backZ]
+    ];
 
-    // Scanning face (curved bottom, brighter)
-    const faceGrad = ctx.createLinearGradient(0, bodyH * 0.35, 0, bodyH * 0.55);
-    faceGrad.addColorStop(0, "#5a9ec0");
-    faceGrad.addColorStop(1, "#3a7898");
-    ctx.fillStyle = faceGrad;
-    ctx.beginPath();
-    ctx.moveTo(-headW / 2, bodyH * 0.38);
-    ctx.lineTo(headW / 2, bodyH * 0.38);
-    // Curved bottom (convex transducer face)
-    ctx.quadraticCurveTo(headW / 2 - 2 * scale, bodyH * 0.55, 0, bodyH * 0.58);
-    ctx.quadraticCurveTo(-headW / 2 + 2 * scale, bodyH * 0.55, -headW / 2, bodyH * 0.38);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "#7ab8d6";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+    // Draw side panels (connecting front/back edges)
+    const sideColors = ["#253848", "#2a4050", "#2d4458", "#2a4050", "#253848", "#2a3a4a"];
+    for (let i = 0; i < 6; i++) {
+      const j = (i + 1) % 6;
+      const sidePts = [frontPtsRaw[i], frontPtsRaw[j], backPtsRaw[j], backPtsRaw[i]];
+      // Check if this face is visible (simple backface culling)
+      const p0 = project3D(...sidePts[0]);
+      const p1 = project3D(...sidePts[1]);
+      const p2 = project3D(...sidePts[2]);
+      const cross = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+      if (cross > 0) {
+        drawPoly(sidePts, sideColors[i], "#3a5568", 0.8);
+      }
+    }
 
-    // Crystal element lines on face
-    ctx.strokeStyle = "rgba(122, 184, 214, 0.4)";
-    ctx.lineWidth = 0.5;
-    for (let i = -3; i <= 3; i++) {
-      const lx = i * (headW / 8);
+    // --- Front face (Z = thick/2) ---
+    // Dynamic color based on lighting
+    const r1 = Math.round(40 + 40 * lightFactor);
+    const g1 = Math.round(70 + 40 * lightFactor);
+    const b1 = Math.round(90 + 40 * lightFactor);
+    drawPoly(frontPtsRaw, `rgb(${r1},${g1},${b1})`, "#5a8098", 1.5);
+
+    // --- Scanning face (bottom edge, curved, bright cyan) ---
+    const faceSteps = 12;
+    const facePtsF = [];
+    const facePtsB = [];
+    for (let i = 0; i <= faceSteps; i++) {
+      const t = i / faceSteps;
+      const x = -faceW + 2 * faceW * t;
+      const curve = faceD * Math.sin(t * Math.PI); // convex bulge
+      facePtsF.push([x, curve, frontZ]);
+      facePtsB.push([x, curve, backZ]);
+    }
+    // Front scanning face strip
+    const scanFace = [
+      [-faceW, 0, frontZ], ...facePtsF, [faceW, 0, frontZ]
+    ];
+    const faceLight = 0.6 + 0.4 * lightFactor;
+    const fr = Math.round(90 * faceLight);
+    const fg = Math.round(158 * faceLight);
+    const fb = Math.round(192 * faceLight);
+    drawPoly(scanFace, `rgb(${fr},${fg},${fb})`, "#7ab8d6", 1.5);
+
+    // Curved bottom surface (connect front and back curves)
+    for (let i = 0; i < faceSteps; i++) {
+      const quad = [facePtsF[i], facePtsF[i + 1], facePtsB[i + 1], facePtsB[i]];
+      const p0 = project3D(...quad[0]);
+      const p1 = project3D(...quad[1]);
+      const p2 = project3D(...quad[2]);
+      const cross = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+      if (cross > 0) {
+        drawPoly(quad, `rgba(${fr},${fg},${fb},0.8)`, "#5a9ec0", 0.5);
+      }
+    }
+
+    // --- Crystal element lines on front face ---
+    ctx.strokeStyle = `rgba(122, 184, 214, ${0.3 + 0.3 * lightFactor})`;
+    ctx.lineWidth = 0.8;
+    for (let i = 1; i < 6; i++) {
+      const t = i / 6;
+      const x = -faceW + 2 * faceW * t;
+      const curve = faceD * Math.sin(t * Math.PI);
+      const p1 = project3D(x, 0, frontZ);
+      const p2 = project3D(x, curve * 0.8, frontZ);
       ctx.beginPath();
-      ctx.moveTo(lx, bodyH * 0.39);
-      const curveFrac = 1 - (Math.abs(i) / 4);
-      ctx.lineTo(lx, bodyH * (0.39 + 0.16 * curveFrac));
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
     }
 
-    // Probe marker notch (orange dot on right side of handle)
-    const notchR = Math.max(2.5, 3.5 * scale);
+    // --- Probe marker notch (orange, on right side of handle) ---
+    const notchP = project3D(hw + 2, -hh - bodyLen + 10, frontZ + 1);
+    const notchR = Math.max(4, 5 * S);
     ctx.fillStyle = "#e0a040";
     ctx.beginPath();
-    ctx.arc(handleW / 2 - notchR * 0.3, -bodyH * 0.1 - handleH * pf * 0.7, notchR, 0, Math.PI * 2);
+    ctx.arc(notchP.x, notchP.y, notchR, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#0b0f14";
-    ctx.font = `bold ${Math.max(5, 6 * scale)}px Inter, sans-serif`;
+    ctx.font = `bold ${Math.max(8, 9 * S)}px Inter, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("M", handleW / 2 - notchR * 0.3, -bodyH * 0.1 - handleH * pf * 0.7);
-    ctx.textBaseline = "alphabetic";
+    ctx.fillText("M", notchP.x, notchP.y);
 
-    // Handle grip lines
-    ctx.strokeStyle = "rgba(90, 130, 160, 0.3)";
-    ctx.lineWidth = 0.8;
-    for (let i = 0; i < 4; i++) {
-      const gy = -bodyH * 0.1 - handleH * pf * (0.25 + i * 0.15);
+    // --- Handle grip lines ---
+    ctx.strokeStyle = "rgba(90, 140, 180, 0.35)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const gy = -bodyLen - hh + 8 + i * (hh - 12) / 4;
+      const p1 = project3D(-hw + 2, gy, frontZ + 0.5);
+      const p2 = project3D(hw - 2, gy, frontZ + 0.5);
       ctx.beginPath();
-      ctx.moveTo(-handleW / 2 + 3 * scale, gy);
-      ctx.lineTo(handleW / 2 - 3 * scale, gy);
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
       ctx.stroke();
     }
 
-    // Cable (exits top of handle)
-    ctx.strokeStyle = "#3a5060";
-    ctx.lineWidth = Math.max(2.5, 3.5 * scale);
+    // --- Cable (top of handle) ---
+    ctx.strokeStyle = "#3a5568";
+    ctx.lineWidth = Math.max(3, 4 * S);
     ctx.lineCap = "round";
+    const cableStart = project3D(0, -hh - bodyLen, 0);
+    const cableMid = project3D(-3, -hh - bodyLen - 18, 2);
+    const cableEnd = project3D(0, -hh - bodyLen - 32, 5);
     ctx.beginPath();
-    ctx.moveTo(0, -bodyH * 0.1 - handleH * pf);
-    ctx.quadraticCurveTo(-2 * scale, -bodyH * 0.1 - handleH * pf - 12 * scale, 0, -bodyH * 0.1 - handleH * pf - 20 * scale);
+    ctx.moveTo(cableStart.x, cableStart.y);
+    ctx.quadraticCurveTo(cableMid.x, cableMid.y, cableEnd.x, cableEnd.y);
     ctx.stroke();
     ctx.lineCap = "butt";
 
-    // --- RGB Orientation Axes ---
-    const axisLen = 28 * scale;
-    const arrowSize = 5 * scale;
-    const axisOriginY = bodyH * 0.12;
+    // --- RGB Orientation Axes (rotate with probe) ---
+    const axisLen = 40;
+    const arrowSz = 7;
+    const axO = project3D(0, 5, 0); // axis origin at probe center
 
-    // Z-axis (blue, up)
-    ctx.strokeStyle = "#4488ff";
-    ctx.fillStyle = "#4488ff";
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(0, axisOriginY);
-    ctx.lineTo(0, axisOriginY - axisLen);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, axisOriginY - axisLen - arrowSize);
-    ctx.lineTo(-arrowSize * 0.5, axisOriginY - axisLen);
-    ctx.lineTo(arrowSize * 0.5, axisOriginY - axisLen);
-    ctx.closePath();
-    ctx.fill();
+    // Helper to draw a 3D axis arrow
+    function drawAxis(dx, dy, dz, color, label) {
+      const tip = project3D(dx * axisLen, 5 + dy * axisLen, dz * axisLen);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3 * S;
+      ctx.beginPath();
+      ctx.moveTo(axO.x, axO.y);
+      ctx.lineTo(tip.x, tip.y);
+      ctx.stroke();
+      // Arrowhead
+      const dir = Math.atan2(tip.y - axO.y, tip.x - axO.x);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(tip.x + Math.cos(dir) * arrowSz * S, tip.y + Math.sin(dir) * arrowSz * S);
+      ctx.lineTo(tip.x + Math.cos(dir + 2.5) * arrowSz * 0.6 * S, tip.y + Math.sin(dir + 2.5) * arrowSz * 0.6 * S);
+      ctx.lineTo(tip.x + Math.cos(dir - 2.5) * arrowSz * 0.6 * S, tip.y + Math.sin(dir - 2.5) * arrowSz * 0.6 * S);
+      ctx.closePath();
+      ctx.fill();
+      // Label
+      ctx.fillStyle = color;
+      ctx.font = `bold ${Math.max(10, 12 * S)}px Inter, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, tip.x + Math.cos(dir) * 14 * S, tip.y + Math.sin(dir) * 14 * S);
+    }
 
-    // X-axis (green, right)
-    ctx.strokeStyle = "#44cc44";
-    ctx.fillStyle = "#44cc44";
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(0, axisOriginY);
-    ctx.lineTo(axisLen, axisOriginY);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(axisLen + arrowSize, axisOriginY);
-    ctx.lineTo(axisLen, axisOriginY - arrowSize * 0.5);
-    ctx.lineTo(axisLen, axisOriginY + arrowSize * 0.5);
-    ctx.closePath();
-    ctx.fill();
+    drawAxis(0, -1, 0, "#4488ff", "Z");  // Blue — up
+    drawAxis(1, 0, 0, "#44cc44", "X");   // Green — right
+    drawAxis(0, 0, 1, "#dd3333", "Y");   // Red — forward
 
-    // Y-axis (red, forward/down-right — shown in perspective)
-    ctx.strokeStyle = "#dd3333";
-    ctx.fillStyle = "#dd3333";
-    ctx.lineWidth = 2.5;
-    const yAxisX = axisLen * 0.65;
-    const yAxisY = axisLen * 0.65;
-    ctx.beginPath();
-    ctx.moveTo(0, axisOriginY);
-    ctx.lineTo(yAxisX, axisOriginY + yAxisY);
-    ctx.stroke();
-    ctx.beginPath();
-    const yDirX = yAxisX / Math.sqrt(yAxisX * yAxisX + yAxisY * yAxisY);
-    const yDirY = yAxisY / Math.sqrt(yAxisX * yAxisX + yAxisY * yAxisY);
-    ctx.moveTo(yAxisX + yDirX * arrowSize, axisOriginY + yAxisY + yDirY * arrowSize);
-    ctx.lineTo(yAxisX - yDirY * arrowSize * 0.5, axisOriginY + yAxisY + yDirX * arrowSize * 0.5);
-    ctx.lineTo(yAxisX + yDirY * arrowSize * 0.5, axisOriginY + yAxisY - yDirX * arrowSize * 0.5);
-    ctx.closePath();
-    ctx.fill();
-
+    ctx.textBaseline = "alphabetic";
     ctx.restore();
   }
 
@@ -1232,6 +1293,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Wire free probe movement → server interpolation
   let _probeMoveThrottle = 0;
   probeOverlay.onProbeMove = (nx, ny, snappedZone) => {
+    // Move 3D probe to match chest position
+    if (window.probe3d) window.probe3d.setPosition(nx, ny);
     const now = Date.now();
     if (now - _probeMoveThrottle < 80) return; // throttle to ~12 updates/sec
     _probeMoveThrottle = now;
@@ -1419,6 +1482,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Zone click — snap probe to zone on the body diagram too
   zoneMap.onZoneClick = (z) => {
     probeOverlay.snapToZone(z);
+    if (window.probe3d) window.probe3d.setPosition(probeOverlay.probeNx, probeOverlay.probeNy);
     ws.send({ type: "select_zone", zone: z });
   };
 
@@ -1478,6 +1542,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bleManager.onIMU = (y, p, r) => {
     probeOverlay.setIMU(y, p, r);
     bmode.setProbeOrientation(y, p, r);
+    if (window.probe3d) window.probe3d.setOrientation(y, p, r);
     document.getElementById("ble-imu").textContent = `Y: ${y.toFixed(1)} P: ${p.toFixed(1)} R: ${r.toFixed(1)}`;
     ws.send({ type: "imu_update", yaw: y, pitch: p, roll: r });
   };
@@ -1485,7 +1550,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("ble-calibrate-btn").addEventListener("click", () => bleManager.calibrateYaw());
   document.getElementById("probe-reset-btn").addEventListener("click", () => {
     probeOverlay.resetOrientation();
-    // Reset sliders to match
+    if (window.probe3d) window.probe3d.resetOrientation();
     document.getElementById("yaw-slider").value = 0;
     document.getElementById("pitch-slider").value = 0;
     document.getElementById("roll-slider").value = 0;
@@ -1498,6 +1563,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const yawSlider = document.getElementById("yaw-slider");
   const pitchSlider = document.getElementById("pitch-slider");
   const rollSlider = document.getElementById("roll-slider");
+
+  // Throttled orientation update to server
+  let _orientThrottle = 0;
+  let _probeMovingTimer = null;
+  function sendOrientationToServer(y, p, r) {
+    const now = Date.now();
+    if (now - _orientThrottle < 150) return; // ~6-7 updates/sec to avoid latency
+    _orientThrottle = now;
+    ws.send({ type: "imu_update", yaw: y, pitch: p, roll: r });
+    // Disable play button while actively moving
+    const playBtn = document.getElementById("play-btn");
+    playBtn.disabled = true;
+    playBtn.style.opacity = "0.3";
+    clearTimeout(_probeMovingTimer);
+    _probeMovingTimer = setTimeout(() => {
+      playBtn.disabled = false;
+      playBtn.style.opacity = "1";
+    }, 400);
+  }
 
   function onSliderInput() {
     const y = parseFloat(yawSlider.value);
@@ -1512,21 +1596,25 @@ document.addEventListener("DOMContentLoaded", () => {
     probeOverlay._updateAngleDisplay();
     probeOverlay._dirty = true;
     bmode.setProbeOrientation(y, p, r);
+    if (window.probe3d) window.probe3d.setOrientation(y, p, r);
+    sendOrientationToServer(y, p, r);
   }
 
   yawSlider.addEventListener("input", onSliderInput);
   pitchSlider.addEventListener("input", onSliderInput);
   rollSlider.addEventListener("input", onSliderInput);
 
-  // Sync sliders when probe orientation changes via drag
+  // Sync sliders + 3D viewer when probe orientation changes via drag
   probeOverlay.onOrientationChange = (y, p, r) => {
     bmode.setProbeOrientation(y, p, r);
+    if (window.probe3d) window.probe3d.setOrientation(y, p, r);
     yawSlider.value = Math.round(y);
     pitchSlider.value = Math.round(p);
     rollSlider.value = Math.round(r);
     document.getElementById("yaw-value").textContent = Math.round(y);
     document.getElementById("pitch-value").textContent = Math.round(p);
     document.getElementById("roll-value").textContent = Math.round(r);
+    sendOrientationToServer(y, p, r);
   };
 
   // Disable sliders when BLE is active
