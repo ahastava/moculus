@@ -51,6 +51,7 @@ WORKDIR /app
 
 # Copy project source
 COPY src/ src/
+COPY scripts/ scripts/
 COPY static/ static/
 COPY configs/ configs/
 COPY requirements.txt .

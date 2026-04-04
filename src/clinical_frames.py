@@ -436,28 +436,63 @@ class ClinicalFrameGenerator:
         image: np.ndarray,
         rng: np.random.Generator,
         effusion_depth_m: float = 0.025,
+        echogenic: bool = False,
     ) -> np.ndarray:
         """
-        Draw pleural effusion: anechoic (black) fluid collection
-        above the diaphragm.
+        Draw pleural effusion: fluid collection above the diaphragm.
 
         Features:
           - Anechoic space between visceral and parietal pleura
           - Spine sign: vertebral bodies visible through fluid
           - Quad sign: bounded by pleural line above and lung below
           - May show internal echoes if complex/exudative
+
+        Args:
+          echogenic: If True, render echogenic fluid (hemothorax / complex
+            effusion). Acute blood is echogenic (gray, not black) with
+            internal debris patterns and heterogeneous layering.
         """
         effusion_start = self.pleural_row + 2
         effusion_px = int(effusion_depth_m / self.m_per_px_axial)
         effusion_end = min(self.H, effusion_start + effusion_px)
 
-        # Anechoic fluid (very dark with minimal internal echoes)
-        fluid = np.full((effusion_end - effusion_start, self.W), 0.02)
-        # Very faint internal swirling (fluid not perfectly anechoic)
-        swirl = rng.normal(0, 0.01, fluid.shape)
-        swirl = gaussian_filter(swirl, sigma=[3, 3])
-        fluid += np.abs(swirl)
-        fluid = np.clip(fluid, 0, 0.08)
+        eff_h = effusion_end - effusion_start
+        if eff_h <= 0:
+            return image
+
+        if echogenic:
+            # Hemothorax: echogenic fluid — acute blood appears gray with
+            # heterogeneous internal echoes, layering (dependent debris),
+            # and swirling patterns from cellular content
+            base_brightness = rng.uniform(0.15, 0.30)
+            fluid = np.full((eff_h, self.W), base_brightness)
+
+            # Dependent layering: brighter at bottom (settled cellular debris)
+            gradient = np.linspace(0, 0.15, eff_h).reshape(-1, 1)
+            fluid += gradient
+
+            # Heterogeneous internal echoes (fibrin strands, clot fragments)
+            debris = rng.normal(0, 0.06, fluid.shape)
+            debris = gaussian_filter(debris, sigma=[2, 4])
+            fluid += debris
+
+            # Scattered bright foci (small clot particles)
+            n_foci = rng.integers(3, 10)
+            for _ in range(n_foci):
+                fr = rng.integers(0, eff_h)
+                fc = rng.integers(0, self.W)
+                r0, r1 = max(0, fr - 1), min(eff_h, fr + 2)
+                c0, c1 = max(0, fc - 2), min(self.W, fc + 3)
+                fluid[r0:r1, c0:c1] = rng.uniform(0.35, 0.50)
+
+            fluid = np.clip(fluid, 0.05, 0.55)
+        else:
+            # Simple serous effusion: anechoic (very dark)
+            fluid = np.full((eff_h, self.W), 0.02)
+            swirl = rng.normal(0, 0.01, fluid.shape)
+            swirl = gaussian_filter(swirl, sigma=[3, 3])
+            fluid += np.abs(swirl)
+            fluid = np.clip(fluid, 0, 0.08)
 
         image[effusion_start:effusion_end, :] = fluid
 
@@ -618,22 +653,51 @@ class ClinicalFrameGenerator:
     def generate_pneumothorax(self, rng: np.random.Generator) -> np.ndarray:
         """
         Pneumothorax: A-lines, NO lung sliding (absent on M-mode = stratosphere).
-        Key visual differences from normal:
+
+        Generates a spectrum from simple to tension pneumothorax:
           - Very bright, thick pleural line (air-tissue interface is highly reflective)
           - Strong, crisp, numerous A-lines (repeated reverberations in trapped air)
           - Sub-pleural region is dark/empty — no granular texture (no sliding parenchyma)
           - A-lines appear sharper/brighter than normal
+
+        Tension pneumothorax additional features (randomly included):
+          - Absent lung sliding (already modeled)
+          - Markedly bright/thick pleural line from increased air-tissue impedance mismatch
+          - Very dark sub-pleural space (large air collection)
+          - Possible flattened or inverted diaphragm appearance
+          - Wider intercostal spaces (hyperexpansion)
         """
+        # Randomly vary severity: 0 = simple PTX, 1 = full tension
+        severity = rng.uniform(0, 1)
+        is_tension = severity > 0.5
+
         image = self._generate_tissue_texture(rng)
-        # Very bright, thick pleural line
-        image = self._draw_pleural_line(image, rng, intensity=1.0, thickness_px=5)
-        # Strong, numerous A-lines
-        image = self._draw_a_lines(image, n_reverberations=6, base_intensity=0.95)
+
+        # Pleural line: brighter and thicker with tension
+        pleural_thickness = 5 if not is_tension else rng.integers(5, 8)
+        image = self._draw_pleural_line(image, rng, intensity=1.0, thickness_px=pleural_thickness)
+
+        # A-lines: more numerous and brighter with tension
+        n_reverb = 6 if not is_tension else rng.integers(7, 10)
+        image = self._draw_a_lines(image, n_reverberations=n_reverb, base_intensity=0.95)
         image = self._add_rib_shadows(image, rng)
+
         # Dark sub-pleural region — trapped air = no parenchymal texture
         sub_start = self.pleural_row + 6
         if sub_start < self.H:
-            image[sub_start:] *= 0.55  # significantly darker between A-lines
+            # Tension: even darker sub-pleural space (larger air collection)
+            darkness = 0.35 if is_tension else 0.55
+            image[sub_start:] *= darkness
+
+        if is_tension:
+            # Wider rib shadow spacing (hyperexpanded hemithorax)
+            # Achieved by narrowing the rib shadows slightly
+            shadow_cols = [self.W // 6, 5 * self.W // 6]
+            for col in shadow_cols:
+                c0 = max(0, col - 2)
+                c1 = min(self.W, col + 3)
+                image[self.pleural_row:, c0:c1] *= 0.3
+
         image = self._apply_depth_attenuation(image)
         image = self._apply_speckle_noise(image, rng)
         return self._log_compress(image)
@@ -686,15 +750,30 @@ class ClinicalFrameGenerator:
 
     def generate_pleural_effusion(self, rng: np.random.Generator) -> np.ndarray:
         """
-        Pleural effusion: anechoic fluid between visceral and parietal pleura.
+        Pleural effusion: fluid between visceral and parietal pleura.
 
-        Quad sign: fluid bounded by pleural line above, lung/diaphragm below,
-        and rib shadows laterally. Spine sign in larger effusions.
+        Generates a spectrum of effusion types:
+          - Simple/serous: anechoic (black), quad sign, spine sign
+          - Hemothorax: echogenic fluid (gray) with internal debris,
+            dependent layering, and heterogeneous echoes from blood products
+          - Complex/exudative: intermediate echogenicity
+
+        30% chance of echogenic (hemothorax) variant to boost
+        representation of trauma pathology in training data.
         """
         image = self._generate_tissue_texture(rng)
         image = self._draw_pleural_line(image, rng)
-        effusion_size = rng.uniform(0.015, 0.04)  # 1.5-4 cm
-        image = self._draw_pleural_effusion(image, rng, effusion_depth_m=effusion_size)
+
+        # Hemothorax tends to be larger volume in trauma
+        is_hemothorax = rng.random() < 0.30
+        if is_hemothorax:
+            effusion_size = rng.uniform(0.025, 0.06)  # 2.5-6 cm (larger)
+        else:
+            effusion_size = rng.uniform(0.015, 0.04)  # 1.5-4 cm
+
+        image = self._draw_pleural_effusion(
+            image, rng, effusion_depth_m=effusion_size, echogenic=is_hemothorax
+        )
         image = self._add_rib_shadows(image, rng)
         image = self._apply_depth_attenuation(image)
         image = self._apply_speckle_noise(image, rng)
