@@ -910,6 +910,7 @@ def train(
     cfg_dropout: float = 0.10,
     ema_decay: float = 0.9999,
     resume_path: Optional[str] = None,
+    finetune: bool = False,
     sample_every: int = 10,
     save_every: int = 25,
 ):
@@ -970,12 +971,20 @@ def train(
     if resume_path:
         ckpt = torch.load(_ROOT / resume_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
         if "ema" in ckpt:
             ema.load_state_dict(ckpt["ema"])
-        start_epoch = ckpt.get("epoch", 0) + 1
-        best_val_loss = ckpt.get("best_val_loss", float("inf"))
-        logger.info(f"Resumed from epoch {start_epoch}")
+        if finetune:
+            # Fine-tune: keep model/EMA weights, reset everything else
+            logger.info(
+                f"Fine-tuning from {resume_path} (epoch {ckpt.get('epoch', '?')}). "
+                f"Fresh optimizer, LR schedule, epoch counter."
+            )
+        else:
+            # Full resume: restore optimizer state and epoch counter
+            optimizer.load_state_dict(ckpt["optimizer"])
+            start_epoch = ckpt.get("epoch", 0) + 1
+            best_val_loss = ckpt.get("best_val_loss", float("inf"))
+            logger.info(f"Resumed from epoch {start_epoch}")
 
     # Training
     for epoch in range(start_epoch, epochs):
@@ -1141,6 +1150,8 @@ def main():
     parser.add_argument("--image-size", type=int, default=256)
     parser.add_argument("--cfg-dropout", type=float, default=0.10)
     parser.add_argument("--resume", type=str, default=None)
+    parser.add_argument("--finetune", action="store_true",
+                        help="Load model/EMA weights from --resume but reset epoch, optimizer, and LR schedule")
     parser.add_argument("--sample-every", type=int, default=5)
     parser.add_argument("--save-every", type=int, default=25)
     args = parser.parse_args()
@@ -1168,6 +1179,7 @@ def main():
         image_size=args.image_size,
         cfg_dropout=args.cfg_dropout,
         resume_path=args.resume,
+        finetune=args.finetune,
         sample_every=args.sample_every,
         save_every=args.save_every,
     )
