@@ -77,6 +77,10 @@ class RealPOCUSDataset(Dataset):
     image — and that's intentional. The model learns the *correlation* between
     structural features (e.g., bright band = pleural line) and their realistic
     appearance, not a pixel-to-pixel mapping.
+
+    When anatomy_bank is provided, guides are enhanced with real lesion textures
+    (50% probability during training) to close the train/inference gap — the
+    inference pipeline always uses anatomy bank enhancement.
     """
 
     def __init__(
@@ -85,6 +89,8 @@ class RealPOCUSDataset(Dataset):
         split: str = "train",
         image_size: int = 256,
         augment: bool = True,
+        anatomy_bank=None,
+        anatomy_blend: float = 0.35,
     ):
         self.data_dir = Path(data_dir)
         self.image_size = image_size
@@ -112,6 +118,10 @@ class RealPOCUSDataset(Dataset):
 
         # Initialize structural guide generator (lazy)
         self._guide_gen = None
+
+        # Anatomy bank for guide enhancement (closes train/inference gap)
+        self.anatomy_bank = anatomy_bank
+        self.anatomy_blend = anatomy_blend
 
         # Class weights for balanced sampling
         counts = {}
@@ -157,6 +167,38 @@ class RealPOCUSDataset(Dataset):
                 guide = self.guide_gen.generate(ClinicalPathology(label))
             except (ValueError, KeyError):
                 guide = np.zeros_like(image)
+
+        # Anatomy bank enhancement (50% chance during training)
+        if self.anatomy_bank is not None and self.augment and np.random.random() < 0.5:
+            try:
+                texture = self.anatomy_bank.sample_lesion_texture(label)
+                if texture is not None:
+                    row, col = self.anatomy_bank.sample_lesion_position(
+                        label, image_size=self.image_size,
+                        pleural_row=int(self.image_size * 0.17),
+                    )
+                    ph, pw = texture.shape[:2]
+                    r0 = max(0, row - ph // 2)
+                    r1 = min(self.image_size, r0 + ph)
+                    c0 = max(0, col - pw // 2)
+                    c1 = min(self.image_size, c0 + pw)
+                    th, tw = r1 - r0, c1 - c0
+                    tex_crop = texture[:th, :tw]
+                    feather = 8
+                    mask = np.ones_like(tex_crop)
+                    for i in range(min(feather, min(th, tw) // 2)):
+                        alpha = i / feather
+                        mask[i, :] *= alpha
+                        mask[-(i + 1), :] *= alpha
+                        mask[:, i] *= alpha
+                        mask[:, -(i + 1)] *= alpha
+                    region = guide[r0:r1, c0:c1]
+                    blend = self.anatomy_blend
+                    guide[r0:r1, c0:c1] = np.clip(
+                        region * (1 - blend * mask) + tex_crop * blend * mask, 0, 1
+                    )
+            except Exception:
+                pass  # Non-critical; fall back to plain guide
 
         # Clinically valid augmentations
         if self.augment:
@@ -931,10 +973,23 @@ def train(
     logger.info(f"Data:   {data_dir}")
     logger.info(f"Output: {output_path}")
 
+    # Load anatomy bank for guide enhancement (closes train/inference gap)
+    anatomy_bank = None
+    bank_path = _ROOT / "checkpoints" / "anatomy_bank.pt"
+    if bank_path.exists():
+        from .anatomy_bank import LesionAnatomyBank
+        anatomy_bank = LesionAnatomyBank.load(str(bank_path))
+        logger.info(f"Loaded anatomy bank from {bank_path}")
+
     # Dataset — loads both B-mode (classes 0-9) and pre-cached M-mode (classes 11-20)
     # M-mode images are already saved to disk with class labels 11-20 in metadata.csv
-    dataset = RealPOCUSDataset(str(_ROOT / data_dir), split="train", image_size=image_size)
-    val_dataset = RealPOCUSDataset(str(_ROOT / data_dir), split="val", image_size=image_size, augment=False)
+    dataset = RealPOCUSDataset(
+        str(_ROOT / data_dir), split="train", image_size=image_size,
+        anatomy_bank=anatomy_bank,
+    )
+    val_dataset = RealPOCUSDataset(
+        str(_ROOT / data_dir), split="val", image_size=image_size, augment=False,
+    )
 
     sampler = WeightedRandomSampler(dataset.sample_weights, len(dataset), replacement=True)
     loader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=4, pin_memory=True)

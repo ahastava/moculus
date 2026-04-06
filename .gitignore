@@ -35,6 +35,9 @@ moculus_pathology_collage.png
 # Notebooks
 notebooks/
 
+# Secrets
+.env
+
 # OS
 .DS_Store
 Thumbs.db

@@ -31,9 +31,13 @@ from pathlib import Path
 # Set PyTorch as Keras backend BEFORE importing zea or keras
 os.environ.setdefault("KERAS_BACKEND", "torch")
 
-import keras
-import zea
-from zea.models.diffusion import DiffusionModel
+try:
+    import keras
+    import zea
+    from zea.models.diffusion import DiffusionModel
+    _HAS_ZEA = True
+except ImportError:
+    _HAS_ZEA = False
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +376,7 @@ class MoCoLUSLungUSGenerator:
 
     def __init__(
         self,
-        diffusion_model: Optional[DiffusionModel],
+        diffusion_model: Optional["DiffusionModel"],
         grid_config: GridConfig,
         image_size: Tuple[int, int] = (256, 256),
         device: str = "cuda",

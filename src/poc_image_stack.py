@@ -1103,8 +1103,11 @@ class POCImageStackGenerator:
         pathology   = result["pathology"]      # "tension_pneumothorax"
     """
 
-    # Default checkpoint path for trained diffusion model
-    _DEFAULT_CKPT = Path(__file__).resolve().parent.parent / "checkpoints" / "zea_lung_pocus"
+    # Default checkpoint paths for ControlNet DDPM
+    _CKPT_ROOT = Path(__file__).resolve().parent.parent / "checkpoints"
+    _DEFAULT_MODEL = "checkpoints/realistic_v4_ab/best.pt"
+    _TRAUMA_MODEL = "checkpoints/realistic_v2_finetune/latest.pt"
+    _ANATOMY_BANK = "checkpoints/anatomy_bank.pt"
 
     def __init__(
         self,
@@ -1126,130 +1129,56 @@ class POCImageStackGenerator:
         self.grid_config = grid_config or GridConfig()
         self.pose_corrector = PoseCorrector(self.grid_config)
 
-        # Try to load diffusion model for photorealistic refinement
-        self._diffusion = None
-        self._diffusion_device = None
-        self._load_diffusion_model()
+        # Load ControlNet DDPM with anatomy bank for photorealistic generation
+        self._realistic_gen = None
+        self._load_realistic_generator()
 
-    def _load_diffusion_model(self):
-        """Load trained diffusion model if checkpoint exists."""
-        ckpt_path = self._DEFAULT_CKPT / "latest.pt"
-        if not ckpt_path.exists():
+    def _load_realistic_generator(self):
+        """Load ControlNet DDPM with anatomy bank for photorealistic generation."""
+        _root = Path(__file__).resolve().parent.parent
+        model_path = _root / self._DEFAULT_MODEL
+        if not model_path.exists():
             return
         try:
-            import os
-            os.environ.setdefault("KERAS_BACKEND", "torch")
-            import torch
-            import keras
-            from zea.models.diffusion import DiffusionModel
+            from .realistic_generator import RealisticLungUSGenerator
 
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            H, W = self.stack_cfg.image_size
+            trauma_path = _root / self._TRAUMA_MODEL
+            trauma_str = self._TRAUMA_MODEL if trauma_path.exists() else None
 
-            # Match the exact architecture used in training
-            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-            img_size = ckpt.get("image_size", H)
-            model = DiffusionModel(
-                input_shape=(img_size, img_size, 1),
-                network_name="unet_time_conditional",
-                operator="identity",
-                guidance={"name": "dps", "params": {"disable_jit": True}},
-                network_kwargs={"widths": [32, 64, 96, 128], "block_depth": 2},
+            self._realistic_gen = RealisticLungUSGenerator.from_pretrained(
+                model_path=self._DEFAULT_MODEL,
+                trauma_model_path=trauma_str,
             )
-            net = model.network
-            # Load EMA weights (better quality) or network weights
-            weights = ckpt.get("ema_shadow", ckpt.get("network", {}))
-            # Keras layer numbering can be offset (e.g., from pretrained init).
-            # Remap by grouping keys by (layer_type, param_suffix) and matching
-            # positionally within each group.
-            import re
-            from collections import defaultdict
-
-            def _parse_keras_key(k):
-                m = re.match(r'_torch_params\.([\w]+?)(_\d+)?/(.*)', k)
-                if m:
-                    return m.group(1), int(m.group(2)[1:]) if m.group(2) else 0, m.group(3)
-                return k, 0, ''
-
-            net_state = net.state_dict()
-            net_groups = defaultdict(list)
-            ckpt_groups = defaultdict(list)
-            for k in net_state:
-                t, idx, s = _parse_keras_key(k)
-                net_groups[(t, s)].append((idx, k))
-            for k in weights:
-                t, idx, s = _parse_keras_key(k)
-                ckpt_groups[(t, s)].append((idx, k))
-
-            loaded = 0
-            for gk in net_groups:
-                if gk in ckpt_groups:
-                    nl = sorted(net_groups[gk])
-                    cl = sorted(ckpt_groups[gk])
-                    for (_, nk), (_, ck) in zip(nl, cl):
-                        if net_state[nk].shape == weights[ck].shape:
-                            net_state[nk] = weights[ck]
-                            loaded += 1
-            net.load_state_dict(net_state)
-            net.to(device)
-            net.eval()
-            self._diffusion = model
-            self._diffusion_device = device
-            self._diffusion_size = img_size
-            print(f"[MoCoLUS] Loaded diffusion model on {device} (img_size={img_size}, {loaded}/{len(weights)} weights)")
+            has_model = self._realistic_gen.has_model
+            has_bank = self._realistic_gen.anatomy_bank is not None
+            print(f"[MoCoLUS] Loaded ControlNet DDPM (model={has_model}, "
+                  f"anatomy_bank={has_bank}, trauma={trauma_str is not None})")
         except Exception as e:
-            print(f"[MoCoLUS] Could not load diffusion model: {e}")
-            self._diffusion = None
+            print(f"[MoCoLUS] Could not load realistic generator: {e}")
+            self._realistic_gen = None
 
-    def _refine_with_diffusion(self, stack: np.ndarray) -> np.ndarray:
-        """Refine physics-based frames using trained diffusion model.
+    def _generate_realistic_stack(
+        self,
+        pathology_class: int,
+        lung_sliding: bool,
+        seed: Optional[int] = None,
+    ) -> Optional[Dict]:
+        """Generate a full stack using the ControlNet DDPM pipeline.
 
-        Uses zea's built-in sampling to generate photorealistic frames,
-        then blends with physics-based frames to preserve anatomical accuracy."""
-        if self._diffusion is None:
-            return stack
-
-        import torch
-        from scipy.ndimage import zoom
-        import keras
-
-        n, H, W = stack.shape
-        model = self._diffusion
-        model_size = self._diffusion_size
-
+        Returns the stack dict from RealisticLungUSGenerator.generate_stack(),
+        or None if the realistic generator is unavailable."""
+        if self._realistic_gen is None:
+            return None
         try:
-            # Generate diffusion samples (batch for efficiency)
-            samples = model.sample(n_samples=n, n_steps=20, verbose=False)
-            if hasattr(samples, 'cpu'):
-                samples = samples.cpu().numpy()
-            else:
-                samples = np.array(samples)
-
-            # samples shape: [n, H, W, 1] — squeeze channel dim
-            if samples.ndim == 4:
-                samples = samples.squeeze(-1)
-
-            refined = np.zeros_like(stack)
-            for i in range(n):
-                diffusion_frame = samples[i]
-
-                # Resize if needed
-                if diffusion_frame.shape != (H, W):
-                    diffusion_frame = zoom(diffusion_frame,
-                        (H / diffusion_frame.shape[0], W / diffusion_frame.shape[1]), order=1)
-
-                # Blend: use physics for structure, diffusion for learned texture
-                physics = stack[i]
-                diff_clean = np.clip(diffusion_frame, 0, 1)
-                # Moderate blend: mostly physics, light diffusion texture overlay
-                # This preserves anatomical accuracy while adding learned appearance
-                blended = 0.75 * physics + 0.25 * diff_clean
-                refined[i] = np.clip(blended, 0, 1)
-
-            return refined
+            return self._realistic_gen.generate_stack(
+                pathology_class=pathology_class,
+                n_frames=self.stack_cfg.n_frames,
+                lung_sliding=lung_sliding,
+                seed=seed,
+            )
         except Exception as e:
-            print(f"[MoCoLUS] Diffusion refinement failed: {e}")
-            return stack
+            print(f"[MoCoLUS] Realistic generation failed: {e}")
+            return None
 
     def generate(
         self,
@@ -1296,23 +1225,30 @@ class POCImageStackGenerator:
         pathology = self.scenario.get_pathology(zone)
         sliding = self.scenario.has_sliding(zone)
 
-        # Generate temporal stack (clinically accurate physics-based)
-        bmode_stack = self.stack_gen.generate_stack(
-            pathology=pathology,
+        # Try ControlNet DDPM pipeline (class-conditioned + anatomy bank)
+        realistic = self._generate_realistic_stack(
+            pathology_class=int(pathology),
             lung_sliding=sliding,
             seed=seed,
         )
 
-        # Refine with diffusion model if available (adds photorealism)
-        bmode_stack = self._refine_with_diffusion(bmode_stack)
+        if realistic is not None:
+            bmode_stack = realistic["bmode_stack"]
+            mmode = realistic["mmode"]
+            mmode_pattern = realistic.get("mmode_pattern", "unknown")
+        else:
+            # Fallback: physics-only generation
+            bmode_stack = self.stack_gen.generate_stack(
+                pathology=pathology,
+                lung_sliding=sliding,
+                seed=seed,
+            )
+            mmode = self.stack_gen.generate_mmode(bmode_stack)
+            mmode_pattern = self.stack_gen.classify_mmode_pattern(mmode)
 
         # Apply pressure-based quality degradation
         if probe.pressure < 0.5:
             bmode_stack = self._degrade_low_pressure(bmode_stack, probe.pressure)
-
-        # Extract M-mode
-        mmode = self.stack_gen.generate_mmode(bmode_stack)
-        mmode_pattern = self.stack_gen.classify_mmode_pattern(mmode)
 
         return {
             "bmode_stack": bmode_stack,

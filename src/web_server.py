@@ -751,7 +751,7 @@ async def generate_preview(req: PreviewRequest):
 
 @app.get("/api/checkpoints")
 async def list_checkpoints():
-    ckpt_dir = _root / "checkpoints" / "zea_lung_pocus"
+    ckpt_dir = _root / "checkpoints"
     if not ckpt_dir.exists():
         return {"checkpoints": []}
     files = sorted(ckpt_dir.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)

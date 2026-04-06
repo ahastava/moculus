@@ -1,6 +1,7 @@
 # MoCoLUS POCUS Trainer — CPU-only Docker Image (multi-arch)
 # ==========================================================
 # For running on machines without NVIDIA GPU.
+# Uses pre-generated frame cache for instant load (no GPU inference needed).
 #
 # Build & push (multi-arch):
 #   docker buildx build --platform linux/amd64,linux/arm64 \
@@ -32,17 +33,10 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # ---------- Stage 2: Runtime ----------
 FROM python:3.11-slim
 
-# Install tkinter (required by zea's viewer module)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-tk && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copy venv from builder
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Environment
-ENV KERAS_BACKEND=torch
 ENV PYTHONPATH=/app/src
 ENV WANDB_MODE=offline
 
@@ -56,10 +50,12 @@ COPY src/ src/
 COPY static/ static/
 COPY configs/ configs/
 COPY requirements.txt .
-COPY .env .
 
-# Pre-generated frame cache (GPU-rendered, for instant CPU playback)
-COPY data/frame_cache.npz data/
+# Copy pre-generated frame cache (GPU-rendered, enables instant load)
+COPY data/frame_cache.npz data/frame_cache.npz
+
+# Create checkpoint directory (models not needed — cache has all frames)
+RUN mkdir -p checkpoints
 
 EXPOSE 8000
 
