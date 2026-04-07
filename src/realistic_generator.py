@@ -84,6 +84,14 @@ class RealisticLungUSGenerator:
     # Trauma classes routed to the fine-tuned model
     TRAUMA_CLASSES = {1, 5, 7}
 
+    # Per-class guidance scale overrides.
+    # Higher values amplify class-specific features (sharper pleural line,
+    # more distinct A-lines/B-lines) at the cost of some diversity.
+    CLASS_GUIDANCE_SCALE = {
+        0: 5.0,   # Normal: boost pleural line sharpness
+        1: 5.5,   # Pneumothorax: needs very bright, distinct pleural line
+    }
+
     def __init__(
         self,
         model=None,
@@ -117,6 +125,10 @@ class RealisticLungUSGenerator:
         if self.trauma_model is not None and pathology_class in self.TRAUMA_CLASSES:
             return self.trauma_model
         return self.model
+
+    def _get_guidance_scale(self, pathology_class: int) -> float:
+        """Return guidance scale for a class, with per-class overrides."""
+        return self.CLASS_GUIDANCE_SCALE.get(pathology_class, self.guidance_scale)
 
     @staticmethod
     def _load_checkpoint(model_path: str, device: str, image_size: int = 256):
@@ -350,7 +362,7 @@ class RealisticLungUSGenerator:
             guide_t,
             labels,
             num_inference_steps=self.num_inference_steps,
-            guidance_scale=self.guidance_scale,
+            guidance_scale=self._get_guidance_scale(pathology_class),
             device=self.device,
         )
 
@@ -407,7 +419,7 @@ class RealisticLungUSGenerator:
             guides_t,
             labels,
             num_inference_steps=self.num_inference_steps,
-            guidance_scale=self.guidance_scale,
+            guidance_scale=self._get_guidance_scale(pathology_class),
             device=self.device,
         )
 
@@ -495,7 +507,7 @@ class RealisticLungUSGenerator:
                 guide_t,
                 labels,
                 num_inference_steps=self.num_inference_steps,
-                guidance_scale=self.guidance_scale,
+                guidance_scale=self._get_guidance_scale(pathology_class),
                 device=self.device,
             )
 
@@ -527,7 +539,7 @@ class RealisticLungUSGenerator:
         mmode_result = sample_images(
             active_model, self.scheduler, mmode_guide, mmode_label,
             num_inference_steps=self.num_inference_steps,
-            guidance_scale=self.guidance_scale,
+            guidance_scale=self._get_guidance_scale(pathology_class),
             device=self.device,
         )
         mmode_frame = (mmode_result[0, 0].cpu().float() + 1.0) / 2.0

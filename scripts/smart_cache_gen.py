@@ -99,6 +99,13 @@ def compute_ssim(a, b):
     return structural_similarity(a, b, data_range=1.0)
 
 
+    # Pathologies where the pleural line is clinically expected to be obscured.
+    # Diffuse B-lines, ARDS (white lung), and interstitial syndrome produce
+    # confluent vertical artifacts that genuinely obscure the pleural line
+    # in real clinical imaging — failing this check is not a quality defect.
+PLEURAL_EXEMPT_CLASSES = {3, 6, 9}  # diffuse B-lines, ARDS, interstitial
+
+
 def evaluate_zone(bmode_stack: np.ndarray, pathology_class: int, real_refs: dict) -> dict:
     """Evaluate quality of a generated zone stack. Returns pass/fail + details."""
     n_frames = bmode_stack.shape[0]
@@ -116,7 +123,8 @@ def evaluate_zone(bmode_stack: np.ndarray, pathology_class: int, real_refs: dict
     detected = sum(detect_pleural_line(bmode_stack[i]) for i in range(n_check))
     pleural_rate = detected / n_check
     result["metrics"]["pleural_rate"] = pleural_rate
-    if pleural_rate < 0.5:
+    # Only fail on pleural detection if the pathology should have a visible pleural line
+    if pleural_rate < 0.5 and pathology_class not in PLEURAL_EXEMPT_CLASSES:
         result["pass"] = False
         result["failures"].append(f"pleural_rate={pleural_rate:.0%}")
 

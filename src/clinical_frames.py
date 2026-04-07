@@ -673,9 +673,22 @@ class ClinicalFrameGenerator:
 
         image = self._generate_tissue_texture(rng)
 
-        # Pleural line: brighter and thicker with tension
-        pleural_thickness = 5 if not is_tension else rng.integers(5, 8)
+        # Pleural line: very bright and thick — air-tissue interface is highly
+        # reflective, making the pleural line the most prominent feature in PTX.
+        # Thicker than normal to ensure the ControlNet model preserves it.
+        pleural_thickness = 6 if not is_tension else rng.integers(7, 10)
         image = self._draw_pleural_line(image, rng, intensity=1.0, thickness_px=pleural_thickness)
+
+        # Reinforce pleural line with a subtle glow (Gaussian blur of bright band)
+        # to help the diffusion model detect and preserve it
+        glow_half = pleural_thickness + 2
+        p_row = self.pleural_row
+        g_r0 = max(0, p_row - glow_half)
+        g_r1 = min(self.H, p_row + glow_half + 1)
+        for dr in range(g_r0, g_r1):
+            dist = abs(dr - p_row)
+            glow = 0.6 * np.exp(-0.5 * (dist / (pleural_thickness * 0.4)) ** 2)
+            image[dr, :] = np.maximum(image[dr, :], glow)
 
         # A-lines: more numerous and brighter with tension
         n_reverb = 6 if not is_tension else rng.integers(7, 10)
