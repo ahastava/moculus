@@ -1111,15 +1111,40 @@ class ChestZoneMap {
 // ---------------------------------------------------------------------------
 
 class BLEProbeManager {
+  /**
+   * Connects to the BNO085 IMU probe via Web Bluetooth.
+   *
+   * Supports two BLE service configurations:
+   *   1. Tianyun's BNO085BLE firmware (custom UUID, primary)
+   *   2. Nordic UART fallback (development/generic probes)
+   *
+   * Data format from BNO085BLE firmware:
+   *   "counter,seconds,loops,transfers,calStatus,YPR=yaw,pitch,roll,Q=qr,qi,qj,qk"
+   *
+   * The onIMU callback receives (yaw, pitch, roll) in degrees.
+   * The onPosition callback receives (nx, ny) normalized 0-1 from pressure mat.
+   */
   constructor() {
     this.device = null;
     this.connected = false;
     this.onIMU = null;
+    this.onPosition = null;  // callback for pressure mat position (nx, ny)
     this.onStatus = null;
     this.yawOffset = 0;
     this._lastRawYaw = 0;
-    this.SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    this.CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+
+    // Tianyun's BNO085BLE firmware UUIDs (primary)
+    this.IMU_SERVICE_UUID = "9a48ecba-2e92-082f-c079-9e75aae428b1";
+    this.IMU_CHAR_UUID = "00000000-0000-0000-0000-0000001234dd";
+
+    // Nordic UART fallback (for development/generic BLE probes)
+    this.UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+    this.UART_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+
+    // Pressure mat grid config (16x16 Velostat via CD74HC4067 mux)
+    // Maps grid (row, col) → normalized chest position (nx, ny)
+    this.GRID_ROWS = 16;
+    this.GRID_COLS = 16;
   }
 
   async connect() {
@@ -1128,17 +1153,36 @@ class BLEProbeManager {
       return;
     }
     try {
-      this.onStatus?.("Scanning...", false);
+      this.onStatus?.("Scanning for probe...", false);
+
+      // Try Tianyun's BNO085BLE service first, fall back to Nordic UART
       this.device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [this.SERVICE_UUID] }],
+        filters: [
+          { services: [this.IMU_SERVICE_UUID] },
+          { services: [this.UART_SERVICE_UUID] },
+        ],
+        optionalServices: [this.IMU_SERVICE_UUID, this.UART_SERVICE_UUID],
       });
+
       const server = await this.device.gatt.connect();
-      const service = await server.getPrimaryService(this.SERVICE_UUID);
-      const char = await service.getCharacteristic(this.CHAR_UUID);
+
+      // Try primary IMU service first
+      let char;
+      try {
+        const service = await server.getPrimaryService(this.IMU_SERVICE_UUID);
+        char = await service.getCharacteristic(this.IMU_CHAR_UUID);
+        this.onStatus?.("Connected (BNO085): " + this.device.name, true);
+      } catch {
+        // Fall back to Nordic UART
+        const service = await server.getPrimaryService(this.UART_SERVICE_UUID);
+        char = await service.getCharacteristic(this.UART_CHAR_UUID);
+        this.onStatus?.("Connected (UART): " + this.device.name, true);
+      }
+
       await char.startNotifications();
       char.addEventListener("characteristicvaluechanged", (e) => this._handle(e));
       this.connected = true;
-      this.onStatus?.("Connected: " + this.device.name, true);
+
       this.device.addEventListener("gattserverdisconnected", () => {
         this.connected = false;
         this.onStatus?.("Disconnected", false);
@@ -1156,22 +1200,53 @@ class BLEProbeManager {
 
   calibrateYaw() { this.yawOffset = -(this._lastRawYaw || 0); }
 
+  /**
+   * Map pressure mat grid coordinates to normalized chest position.
+   * Grid is 16x16, origin top-left.
+   * Chest coordinates: nx=0 (patient right) to 1 (patient left),
+   *                    ny=0 (head/clavicle) to 1 (lower abdomen).
+   */
+  gridToChestPosition(row, col) {
+    const nx = col / (this.GRID_COLS - 1);
+    const ny = row / (this.GRID_ROWS - 1);
+    return { nx, ny };
+  }
+
   _handle(event) {
     const text = new TextDecoder().decode(event.target.value).trim();
     const parts = text.split(",").map(s => s.trim());
+
+    // BNO085BLE format (Tianyun): counter,sec,loops,transfers,calStatus,YPR=yaw,pitch,roll,Q=qr,qi,qj,qk
+    // Parts[5] starts with "YPR="
     let yaw, pitch, roll;
-    if (parts.length >= 8) {
+    if (parts.length >= 8 && parts[5]?.startsWith("YPR=")) {
       yaw = parseFloat(parts[5].replace("YPR=", ""));
       pitch = parseFloat(parts[6]);
       roll = parseFloat(parts[7]);
-    } else if (parts.length >= 4) {
+    }
+    // Fallback: simple "counter,yaw,pitch,roll" format
+    else if (parts.length >= 4) {
       yaw = parseFloat(parts[1]);
       pitch = parseFloat(parts[2]);
       roll = parseFloat(parts[3]);
     } else return;
+
     if (isNaN(yaw) || isNaN(pitch) || isNaN(roll)) return;
     this._lastRawYaw = yaw;
     this.onIMU?.(((yaw + this.yawOffset + 180) % 360) - 180, pitch, roll);
+  }
+
+  /**
+   * Process pressure mat data to determine probe position.
+   * Called externally when aggregator data is received (e.g., via serial WebSocket).
+   * @param {number} row - Hot spot row (0-15)
+   * @param {number} col - Hot spot column (0-15)
+   * @param {number} pressure - Peak pressure value (0-4095)
+   */
+  updatePressurePosition(row, col, pressure) {
+    if (pressure < 200) return; // No contact
+    const { nx, ny } = this.gridToChestPosition(row, col);
+    this.onPosition?.(nx, ny, pressure / 4095);
   }
 }
 
@@ -1545,6 +1620,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (window.probe3d) window.probe3d.setOrientation(y, p, r);
     document.getElementById("ble-imu").textContent = `Y: ${y.toFixed(1)} P: ${p.toFixed(1)} R: ${r.toFixed(1)}`;
     ws.send({ type: "imu_update", yaw: y, pitch: p, roll: r });
+  };
+
+  // Pressure mat → probe position on chest diagram
+  bleManager.onPosition = (nx, ny, pressure) => {
+    probeOverlay.setProbePosition(nx, ny);
+    if (window.probe3d) window.probe3d.setPosition(nx, ny);
+    ws.send({ type: "probe_position", nx, ny });
   };
   document.getElementById("ble-connect-btn").addEventListener("click", () => { if (bleManager.connected) bleManager.disconnect(); else bleManager.connect(); });
   document.getElementById("ble-calibrate-btn").addEventListener("click", () => bleManager.calibrateYaw());

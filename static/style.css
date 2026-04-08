@@ -26,18 +26,19 @@
 
 html, body {
   height: 100%;
-  overflow: hidden;
+  overflow: auto;
 }
 
 body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: 15px;
+  line-height: 1.5;
+  min-width: 900px;
 }
 
-.mono { font-family: var(--font-mono); font-size: 12px; }
+.mono { font-family: var(--font-mono); font-size: 13px; }
 
 /* ========== HEADER ========== */
 
@@ -45,15 +46,15 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 5px 16px;
+  padding: 8px 20px;
   background: var(--bg2);
   border-bottom: 1px solid var(--border);
-  height: 36px;
+  height: 44px;
   flex-shrink: 0;
 }
 
 .logo {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--text-h);
   letter-spacing: 0.5px;
@@ -61,7 +62,7 @@ body {
 }
 
 .logo-sub {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 400;
   color: var(--dim);
   margin-left: 8px;
@@ -155,12 +156,12 @@ body {
 }
 
 .card-title {
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.7px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 /* ========== B-MODE / M-MODE DISPLAY ========== */
@@ -184,7 +185,7 @@ body {
 .display-header span:first-child {
   color: var(--accent);
   font-weight: 600;
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -246,7 +247,7 @@ body {
 #sliding-badge {
   padding: 2px 6px;
   border-radius: 2px;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 #sliding-badge.present { background: rgba(76, 175, 122, 0.15); color: var(--green); }
@@ -339,7 +340,7 @@ body {
 
 .probe-info {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   color: var(--dim);
   padding: 4px 0 2px;
   display: flex;
@@ -370,7 +371,7 @@ body {
 }
 
 .slider-label {
-  font-size: 11px;
+  font-size: 13px;
   font-family: var(--font-mono);
   color: var(--dim);
   min-width: 52px;
@@ -405,7 +406,7 @@ body {
 }
 
 .slider-value {
-  font-size: 11px;
+  font-size: 13px;
   font-family: var(--font-mono);
   color: var(--accent);
   min-width: 28px;
@@ -429,7 +430,7 @@ body {
   padding: 5px;
   font-weight: 600;
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: 13px;
 }
 .mode-btn.active {
   background: rgba(90, 158, 192, 0.1);
@@ -451,7 +452,7 @@ body {
 }
 
 .side-label {
-  font-size: 11px;
+  font-size: 13px;
   fill: var(--dim);
   font-weight: 600;
   font-family: var(--font);
@@ -511,7 +512,7 @@ body {
 .btn-warning:hover   { background: var(--orange); color: var(--bg); }
 .btn-caution   { border-color: var(--yellow); color: var(--yellow); font-weight: 600; }
 .btn-caution:hover   { background: var(--yellow); color: var(--bg); }
-.btn-small     { padding: 4px 8px; font-size: 11px; }
+.btn-small     { padding: 4px 8px; font-size: 13px; }
 
 .btn-row {
   display: flex;
@@ -553,7 +554,7 @@ body {
 .yellow   { color: var(--yellow); }
 .purple   { color: var(--purple); }
 .bold     { font-weight: 600; }
-.small    { font-size: 11px; }
+.small    { font-size: 13px; }
 
 /* ========== TRAINING TAB ========== */
 
@@ -579,7 +580,7 @@ body {
   align-items: center;
   margin-bottom: 6px;
 }
-.form-grid label { font-size: 11px; color: var(--dim); }
+.form-grid label { font-size: 13px; color: var(--dim); }
 .form-grid .input, .form-grid .select { max-width: 160px; }
 .form-grid input[type="checkbox"] { width: auto; }
 

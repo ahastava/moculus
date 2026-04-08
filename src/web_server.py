@@ -389,7 +389,8 @@ async def simulator_ws(websocket: WebSocket):
                     await websocket.send_json(data)
                 except Exception:
                     return
-            await asyncio.sleep(0.033)  # ~30fps
+            # ~5fps for 16 frames = ~3.2s per loop (realistic respiratory cycle)
+            await asyncio.sleep(0.2)
 
     try:
         while True:
