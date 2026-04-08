@@ -170,15 +170,54 @@ MAC
 fi
 
 echo ""
-echo "  ╔══════════════════════════════════════╗"
-echo "  ║         INSTALL COMPLETE             ║"
-echo "  ╠══════════════════════════════════════╣"
-echo "  ║                                      ║"
-echo "  ║  Desktop shortcut created            ║"
-echo "  ║  Terminal command: moculus start      ║"
-echo "  ║                                      ║"
-echo "  ║  Double-click the desktop icon or    ║"
-echo "  ║  type 'moculus start' to launch.     ║"
-echo "  ║                                      ║"
-echo "  ╚══════════════════════════════════════╝"
+echo "  ╔════════════════════════════════════════════════════════════╗"
+echo "  ║              MoCoLUS — INSTALL COMPLETE                   ║"
+echo "  ╠════════════════════════════════════════════════════════════╣"
+echo "  ║                                                           ║"
+echo "  ║  GETTING STARTED                                          ║"
+echo "  ║  ───────────────                                          ║"
+echo "  ║  1. Double-click 'MoCoLUS Simulator' on your Desktop      ║"
+echo "  ║     OR type: moculus start                                 ║"
+echo "  ║                                                           ║"
+echo "  ║  2. Your browser will open to http://localhost:8000        ║"
+echo "  ║                                                           ║"
+echo "  ║  3. Select a clinical scenario from the dropdown           ║"
+echo "  ║     (e.g., 'Normal', 'Left Pneumothorax')                 ║"
+echo "  ║                                                           ║"
+echo "  ║  4. Click on any of the 8 BLUE protocol zones on the      ║"
+echo "  ║     chest diagram to view ultrasound findings              ║"
+echo "  ║                                                           ║"
+echo "  ║  5. Use 'Test Me' mode for self-assessment:                ║"
+echo "  ║     examine all zones → submit diagnosis → get feedback    ║"
+echo "  ║                                                           ║"
+echo "  ║  COMMANDS                                                  ║"
+echo "  ║  ────────                                                  ║"
+echo "  ║  moculus start    Launch simulator (opens browser)          ║"
+echo "  ║  moculus stop     Shut down simulator                      ║"
+echo "  ║  moculus update   Download latest version and restart       ║"
+echo "  ║  moculus status   Check if simulator is running             ║"
+echo "  ║                                                           ║"
+echo "  ║  NOTES                                                     ║"
+echo "  ║  ─────                                                     ║"
+echo "  ║  • Simulator auto-starts on reboot (unless stopped)        ║"
+echo "  ║  • No internet needed after install                        ║"
+echo "  ║  • BLE probe: click 'Connect Probe' in the web UI          ║"
+echo "  ║  • Run 'moculus update' when notified of new versions       ║"
+echo "  ║                                                           ║"
+echo "  ╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "  Starting MoCoLUS now..."
+echo ""
+
+# Auto-start after install
+docker rm "$NAME" 2>/dev/null
+docker run -d --name "$NAME" -p ${PORT}:8000 --restart unless-stopped "$IMAGE" > /dev/null
+sleep 3
+
+if docker ps --format '{{.Names}}' | grep -q "^${NAME}$"; then
+    echo "  MoCoLUS is running at: http://localhost:${PORT}"
+    xdg-open "http://localhost:${PORT}" 2>/dev/null || open "http://localhost:${PORT}" 2>/dev/null || true
+else
+    echo "  Note: Start manually with 'moculus start'"
+fi
 echo ""
