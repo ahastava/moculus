@@ -5,28 +5,21 @@
 **Lung Ultrasound Made Easy: Step-By-Step Guide**
 - Source: POCUS 101 (www.pocus101.com)
 - Authors: Jade Deschamps, Vi Dinh, et al.
-- URL: https://www.pocus101.com/lung-ultrasound-made-easy-step-by-step-guide/
+- PDF: [Lung_Ultrasound_Made_Easy_POCUS101.pdf](Lung_Ultrasound_Made_Easy_POCUS101.pdf)
 
-This guide covers:
-- 6-point lung ultrasound exam protocol (R1/L1, R2/L2, R3/L3)
-- Probe positioning for anterior, lateral, and posterior chest
-- Normal findings: batwing sign, lung sliding, A-lines, seashore sign
-- Pathological findings: absent sliding, B-lines, confluent B-lines, consolidation, effusion
-- BLUE protocol decision tree for acute respiratory failure
-- Disease profiles: pneumothorax, pneumonia, CPE, ARDS, COPD
-
-> Place a PDF copy of this guide in this directory as `Lung_Ultrasound_Made_Easy_POCUS101.pdf` for offline access.
+Covers the 6-point lung ultrasound exam protocol, probe positioning, normal findings (batwing sign, lung sliding, A-lines, seashore sign), pathological findings (absent sliding, B-lines, consolidation, effusion), BLUE protocol decision tree, and disease profiles for pneumothorax, pneumonia, CPE, ARDS, and COPD.
 
 ## BLUE Protocol Reference
 
 **Lichtenstein DA, Meziere GA.** Relevance of lung ultrasound in the diagnosis of acute respiratory failure: the BLUE protocol. *Chest*. 2008;134:117-125.
 
-The BLUE protocol classifies lung ultrasound findings into profiles:
-- A-profile (A-lines + sliding) → Normal / COPD / PE
-- B-profile (B-lines + sliding) → Pulmonary edema
-- A'-profile (A-lines, no sliding) → Pneumothorax
-- B'-profile (B-lines, no sliding) → Pneumonia
-- C-profile (consolidation) → Pneumonia
+| Profile | Findings | Diagnosis |
+|---|---|---|
+| A-profile | A-lines + sliding | Normal / COPD / PE |
+| B-profile | B-lines + sliding | Pulmonary edema |
+| A'-profile | A-lines, no sliding | Pneumothorax |
+| B'-profile | B-lines, no sliding | Pneumonia |
+| C-profile | Consolidation | Pneumonia |
 
 ## Additional References
 
