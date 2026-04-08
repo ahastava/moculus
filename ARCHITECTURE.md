@@ -15,76 +15,125 @@
 8. [Data Pipeline](#8-data-pipeline)
 9. [Docker Deployment](#9-docker-deployment)
 10. [File Reference](#10-file-reference)
+11. [References & Training Materials](#11-references--training-materials)
 
 ---
 
 ## 0. Clinical Reference
 
-> This section is for physicians and clinical collaborators who want to understand what the simulator does without reading code.
+> For physicians and clinical collaborators. No code knowledge required.
 
 ### What is MoCoLUS?
 
-MoCoLUS is a **lung ultrasound training simulator** that generates realistic B-mode and M-mode POCUS images using AI. It simulates 15 clinical scenarios that a trainee might encounter during a BLUE protocol exam — from normal lungs to tension pneumothorax to ARDS.
+MoCoLUS is an AI-powered **lung ultrasound (POCUS) training simulator**. It generates photorealistic B-mode and M-mode images for 15 clinical scenarios using a diffusion model trained on ~14,000 real clinical POCUS frames.
 
-A trainee opens the web interface, selects (or is assigned) a clinical case, and examines 8 standard probe positions on a virtual chest. At each position, the simulator displays a realistic cine loop showing the expected ultrasound findings for that zone. The trainee then submits a diagnosis and receives immediate feedback.
+**How a trainee uses it:**
+1. Open the web interface on any device (laptop, tablet, workstation)
+2. Select a scenario or enter "Test Me" mode (hidden random case)
+3. Examine 8 BLUE protocol zones using the on-screen probe or a physical BLE probe
+4. Observe B-mode cine loops and M-mode strips at each zone
+5. Submit a diagnosis and receive immediate BLUE protocol feedback
+
+---
 
 ### BLUE Protocol Zones
 
-The simulator uses the standard 8-zone BLUE protocol exam:
+The simulator implements the standard 8-zone BLUE protocol exam adapted from Lichtenstein, 2014. Each zone corresponds to a specific anatomical landmark on the chest wall.
 
-![BLUE Protocol Zones](docs/images/blue_protocol_zones.png)
+> For a comprehensive POCUS training guide, see [Lung Ultrasound Made Easy (POCUS 101)](docs/references/README.md).
 
-Each zone is assigned a pathology based on the clinical scenario. For example, in "Left Pneumothorax," the left-side zones show absent lung sliding with A-lines (A'-profile), while the right-side zones show normal A-profile with sliding.
+![BLUE Protocol — 8 Exam Zones](docs/images/blue_protocol_zones.png)
+
+| Zone | Probe Position | What to Assess |
+|---|---|---|
+| **Upper BLUE (R1/L1)** | 2nd ICS, mid-clavicular line | Pneumothorax (absent sliding), interstitial edema (B-lines) |
+| **Lower BLUE (R2/L2)** | 4-5th ICS, anterior axillary line | B-lines, lung sliding assessment |
+| **PLAPS (R3/L3)** | 10-12th ICS, posterior axillary line | Pleural effusion (quad sign, spine sign), consolidation (shred sign) |
+| **Diaphragm** | Costophrenic angle | Effusion volume, diaphragm excursion |
+
+**BLUE Protocol Profile Classification** (per Lichtenstein, 2008):
+- **A-profile** = A-lines + lung sliding → Normal lungs
+- **B-profile** = B-lines + lung sliding → Pulmonary edema
+- **A'-profile** = A-lines + absent sliding → Pneumothorax
+- **B'-profile** = B-lines + absent sliding → Pneumonia
+- **A/B profile** = A-lines one side, B-lines other → Unilateral pneumonia
+
+---
 
 ### 10 Pathology Classes
 
-The AI model generates frames for 10 distinct pathologies, each with characteristic B-mode and M-mode appearances:
+The AI model generates frames for 10 distinct pathology classes. Each has characteristic B-mode and M-mode appearances that the trainee must learn to recognize.
 
-![Pathology Structural Guides](docs/images/pathology_guides.png)
+![Structural Guides — 10 Pathology Classes](docs/images/pathology_guides.png)
 
-| Class | What the Trainee Sees | Clinical Significance |
-|---|---|---|
-| **Normal A-Profile** | Pleural line + horizontal A-lines + "seashore" M-mode | Healthy lung or COPD — dry interstitium, no consolidation |
-| **Pneumothorax** | Bright pleural line + A-lines + "stratosphere" M-mode | Absent lung sliding — air between visceral and parietal pleura |
-| **Focal B-Lines** | 1-2 vertical laser-like artifacts from pleural line | Normal variant or early interstitial edema |
-| **Diffuse B-Lines** | ≥3 B-lines (B-profile) — A-lines erased | Pulmonary edema, CHF, fluid overload |
-| **Consolidation** | Tissue-like echogenicity with air bronchograms | Hepatized lung — pneumonia, atelectasis |
-| **Pleural Effusion** | Dark (anechoic) fluid above diaphragm, quad sign | Fluid in pleural space — CHF, infection, trauma |
-| **ARDS / White Lung** | Confluent B-lines, bright "white out" appearance | Severe bilateral lung injury — ARDS, COVID pneumonia |
-| **Lung Point** | Transition: one half slides, the other doesn't | Pathognomonic for pneumothorax — marks the PTX boundary |
-| **Pleural Thickening** | Irregular, thickened (>3mm) pleural line | Chronic inflammation, prior pleuritis, mesothelioma |
-| **Interstitial Syndrome** | Multiple B-lines + subpleural consolidations | Interstitial lung disease, viral pneumonitis |
+| # | Pathology | B-Mode Appearance | M-Mode Pattern | Clinical Significance |
+|---|---|---|---|---|
+| 0 | **Normal A-Profile** | Pleural line + horizontal A-lines | Seashore sign | Healthy lung, or COPD (diagnosis of exclusion) |
+| 1 | **Pneumothorax** | Bright pleural line + A-lines, no sliding | Stratosphere/barcode sign | Air between pleural layers — absent sliding rules in PTX |
+| 2 | **Focal B-Lines** | 1-2 vertical comet-tail artifacts | Seashore sign | Normal variant (<3 per field), or early interstitial edema |
+| 3 | **Diffuse B-Lines** | ≥3 B-lines, A-lines erased | Seashore sign | Pulmonary edema (B-profile), CHF, fluid overload |
+| 4 | **Consolidation** | Tissue-like (hepatized) + air bronchograms | Stratosphere sign | Pneumonia, atelectasis — dynamic bronchograms favor infection |
+| 5 | **Pleural Effusion** | Anechoic fluid, quad sign, spine sign | Sinusoid sign | Transudate (CHF) or exudate (infection, malignancy, trauma) |
+| 6 | **ARDS / White Lung** | Confluent B-lines, "white out" | Stratosphere sign | Severe bilateral injury — ARDS, COVID pneumonitis |
+| 7 | **Lung Point** | Sliding ↔ no-sliding transition | Seashore → barcode | Pathognomonic for pneumothorax (100% specificity) |
+| 8 | **Pleural Thickening** | Irregular pleural line (>3mm) | Seashore sign | Chronic inflammation, fibrosis, mesothelioma |
+| 9 | **Interstitial Syndrome** | B-lines + subpleural consolidations | Seashore sign | Interstitial lung disease, viral pneumonitis |
+
+---
 
 ### How the AI Generates These Images
 
-1. **Physics model** builds an anatomically correct structural guide — tissue layers, pleural line depth, A-line spacing, B-line positions, rib shadows
-2. **Real lesion textures** from clinical datasets are blended in at anatomically correct positions (e.g., consolidation near the pleural line, effusion in gravity-dependent areas)
-3. **Diffusion model** (trained on ~14,000 real clinical ultrasound images) transforms the structural guide into a photorealistic frame with realistic speckle texture
+```
+Step 1: Physics Model                    Step 2: Anatomy Bank               Step 3: Diffusion Model
+┌──────────────────────┐        ┌──────────────────────────┐      ┌─────────────────────────┐
+│ Tissue layers:       │        │ Real lesion textures     │      │ ControlNet DDPM         │
+│  skin → fat →        │───────►│ extracted from clinical   │─────►│ (69M params, trained on │
+│  muscle → pleura     │        │ POCUS + spatial PMF      │      │  14,000 real images)    │
+│                      │        │ for anatomically correct  │      │                         │
+│ A-lines, B-lines,    │        │ placement                │      │ Converts structural     │
+│ rib shadows, TGC,    │        │                          │      │ guide → photorealistic  │
+│ speckle noise        │        │ e.g., consolidation near │      │ ultrasound frame        │
+│                      │        │ pleura, effusion inferior│      │                         │
+│ → Structural guide   │        │ → Enhanced guide         │      │ → Final B-mode frame    │
+└──────────────────────┘        └──────────────────────────┘      └─────────────────────────┘
+```
 
-The result looks like a real ultrasound image — not a cartoon or simulation. This is critical for training: if images don't look real, trainees learn to recognize artifacts of the simulation instead of clinical pathology.
+The result looks like a real ultrasound image. This is critical for training — if images look artificial, trainees learn to recognize simulation artifacts instead of clinical pathology.
+
+---
 
 ### 15 Clinical Scenarios
 
-Each scenario represents a complete patient presentation with findings distributed across all 8 zones:
+Each scenario assigns specific pathologies to each of the 8 zones, matching real clinical presentations:
 
-| Scenario | What the trainee should find |
-|---|---|
-| **Normal** | A-profile everywhere, bilateral sliding |
-| **Left/Right Pneumothorax** | A'-profile (no sliding) on affected side, normal contralateral |
-| **PTX with Lung Point** | Transition zone visible — sliding starts/stops |
-| **Pulmonary Edema** | Bilateral B-profile (≥3 B-lines per zone) |
-| **Edema + Effusion** | B-profile + bilateral posterior fluid |
-| **ARDS** | Bilateral white lung, absent sliding |
-| **Pneumonia (L/R/bilateral)** | Consolidation at PLAPS, B-lines anteriorly |
-| **Pleural Effusion** | A-profile anteriorly, fluid posteriorly |
-| **Hemothorax** | Echogenic (not anechoic) fluid — trauma setting |
-| **Pneumonia + Effusion** | Consolidation + parapneumonic fluid |
-| **COPD Exacerbation** | Normal LUS (A-profile + sliding) — diagnosis of exclusion |
+| Scenario | Expected Findings | BLUE Profile |
+|---|---|---|
+| **Normal** | A-lines + sliding everywhere | Bilateral A-profile |
+| **Left Pneumothorax** | No sliding on left, normal right | Left A'-profile |
+| **Right Pneumothorax** | No sliding on right, normal left | Right A'-profile |
+| **PTX + Lung Point** | Transition zone visible on affected side | A'-profile + lung point |
+| **Pulmonary Edema** | ≥3 B-lines bilaterally | Bilateral B-profile |
+| **Edema + Effusion** | B-lines + posterior fluid bilaterally | B-profile + PLAPS effusion |
+| **ARDS** | Confluent B-lines, may have absent sliding | Bilateral white lung |
+| **Left Pneumonia** | Consolidation at L-PLAPS, B-lines anteriorly | Left A/B or C-profile |
+| **Right Pneumonia** | Consolidation at R-PLAPS, B-lines anteriorly | Right A/B or C-profile |
+| **Bilateral Pneumonia** | Bilateral consolidation + interstitial pattern | Bilateral B'-profile |
+| **Right Pleural Effusion** | A-profile anteriorly, fluid at R-PLAPS | A-profile + posterior effusion |
+| **Bilateral Effusion** | Bilateral posterior fluid | PLAPS effusions bilateral |
+| **Hemothorax** | Echogenic fluid (not anechoic) at PLAPS | Trauma setting — hematocrit sign |
+| **Pneumonia + Effusion** | Consolidation + parapneumonic fluid | C-profile + effusion |
+| **COPD Exacerbation** | Normal LUS (A-profile + sliding) | A-profile — diagnosis of exclusion |
+
+---
 
 ### Practice vs Test Mode
 
-- **Practice:** Trainee selects the scenario, can see all findings. For learning.
-- **Test:** Random case, hidden diagnosis. Trainee examines all 8 zones and submits a diagnosis. System provides immediate feedback with BLUE protocol explanation.
+| | Practice Mode | Test Mode |
+|---|---|---|
+| **Scenario** | Trainee selects from dropdown | Random hidden case |
+| **Findings** | Visible in real-time | Must discover by examining zones |
+| **Diagnosis** | Shown alongside findings | Submit guess → instant feedback |
+| **Use case** | Learning BLUE protocol | Competency assessment |
 
 ---
 
@@ -540,3 +589,50 @@ Full environment with CUDA, training support, live diffusion generation. Used fo
 | `style.css` | Dark clinical theme |
 | `probe3d.js` | 3D probe visualization (Three.js) |
 | `probe_mesh.stl` | Probe 3D model |
+
+---
+
+## 11. References & Training Materials
+
+### Clinical Training Resources
+
+| Resource | Description | Location |
+|---|---|---|
+| **Lung Ultrasound Made Easy** (POCUS 101) | Step-by-step POCUS guide: probe positions, all signs/artifacts, pathology profiles, BLUE protocol decision tree | [docs/references/](docs/references/) |
+| **BLUE Protocol** (Lichtenstein, 2008) | Original diagnostic algorithm for acute respiratory failure using lung ultrasound | Lichtenstein DA. *Chest*. 2008;134:117-125 |
+| **Lung Ultrasound in the Critically Ill** (Lichtenstein, 2014) | Comprehensive reference for ICU lung ultrasound, basis for our 8-zone protocol | Lichtenstein DA. *Ann Intensive Care*. 2014;4(1):1 |
+
+### Research Papers (Model & Data)
+
+| Paper | Relevance to MoCoLUS | Citation |
+|---|---|---|
+| **DiffUltra — Lesion-Anatomy Bank** | Inspiration for our anatomy bank: lesion texture extraction + spatial PMF conditioning | Chou et al., "Ultrasound Image Synthesis Using Generative AI for Lung Ultrasound Detection," ISBI 2025, arXiv:2501.06356 |
+| **POCOVID-Net** | Primary training dataset (200+ videos, 8 institutions, CC attribution) | Born et al., "Accelerating Detection of Lung Pathologies with Explainable Ultrasound Image Analysis," *Applied Sciences* 11(2):672, 2021. DOI:10.3390/app11020672 |
+| **COVIDx-US** | Secondary training dataset (EMS/trauma pathologies) | Ebadi et al., "COVIDx-US: An Open-Access Benchmark Dataset," arXiv:2103.10003, 2021 |
+
+### Dataset Provenance
+
+Complete licensing, attribution, per-institution breakdown, and class distribution:
+
+- [data/DATA_PROVENANCE.md](data/DATA_PROVENANCE.md) — Full dataset documentation
+- [data/DATA_ACCESS_REQUESTS.md](data/DATA_ACCESS_REQUESTS.md) — Pending dataset access requests (OpenPOCUS, BEDLUS, ICLUS-DB)
+
+### Training Data Summary
+
+| Source | Frames | License | Classes Covered |
+|---|---|---|---|
+| POCOVID-Net | ~1,800 | CC BY 4.0 | Normal, B-lines diffuse, consolidation, ARDS, pleural thickening, interstitial |
+| COVIDx-US (EMS subset) | ~400 | CC BY-NC 4.0 | Pneumothorax, focal B-lines, effusion, lung point |
+| Butterfly Network | 22 clips | CC BY-NC-SA 4.0 | Effusion, consolidation |
+| LITFL | 44 clips | CC BY-NC-SA 4.0 | Pneumothorax, lung point |
+| University of Florida | 17 clips | CC BY 4.0 | Focal B-lines, effusion |
+| Other (CoreUS, NHS, POCUS Atlas, etc.) | ~150 clips | Various CC | Mixed pathologies |
+| **Total** | **~2,427 labeled frames** | | **10 classes** |
+
+### Model Checkpoints
+
+| Checkpoint | Training Data | Architecture | Purpose |
+|---|---|---|---|
+| `realistic_v4_ab/best.pt` | 14,258 balanced frames + anatomy bank enhancement | ControlNet DDPM (69.2M params) | Production base model — all pathology classes |
+| `realistic_v2_finetune/latest.pt` | Enriched trauma dataset (upsampled PTX/effusion/lung point) | Same architecture | Trauma-specialized — classes 1, 5, 7 |
+| `anatomy_bank.pt` | Extracted from real POCUS dataset | Texture bank + spatial PMFs | Lesion texture + anatomical placement priors |
