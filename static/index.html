@@ -25,7 +25,7 @@
         <div class="card display-card">
           <div class="display-header">
             <span>B-Mode</span>
-            <span id="frame-counter" class="dim mono">0/32</span>
+            <span id="frame-counter" class="dim mono">--</span>
           </div>
           <div id="bmode-wrapper">
             <canvas id="bmode-canvas" width="512" height="512"></canvas>
@@ -48,9 +48,9 @@
         </div>
 
         <div class="playback-bar">
-          <button id="play-btn" class="btn btn-play" title="Play/Pause">&#9654;</button>
-          <input type="range" id="frame-slider" min="0" max="31" value="0" class="frame-slider">
-          <span id="playback-label" class="dim mono">0/32</span>
+          <button id="play-btn" class="btn btn-play" title="Play/Pause cine loop">&#9654; Play</button>
+          <input type="range" id="frame-slider" min="0" max="15" value="0" class="frame-slider">
+          <span id="playback-label" class="dim mono">--</span>
         </div>
       </div>
 
@@ -91,7 +91,7 @@
 
       <!-- COL 3: Controls -->
       <div class="sim-col-controls">
-        <div class="mode-selector">
+        <div class="mode-selector" style="display:none">
           <button id="mode-practice" class="btn mode-btn active">Practice</button>
           <button id="mode-test" class="btn mode-btn">Test Me</button>
         </div>

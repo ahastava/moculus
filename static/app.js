@@ -124,7 +124,7 @@ class BmodeRenderer {
 
       // Depth markers
       ctx.fillStyle = "#8898a8";
-      ctx.font = "10px 'SF Mono', Consolas, monospace";
+      ctx.font = "13px 'SF Mono', Consolas, monospace";
       ctx.textAlign = "right";
       for (let d = 0; d <= 12; d += 2) {
         const y = m.t + (d / 12) * ih;
@@ -142,7 +142,7 @@ class BmodeRenderer {
       if (meta) {
         ctx.fillStyle = "#506070";
         ctx.textAlign = "right";
-        ctx.font = "9px 'SF Mono', Consolas, monospace";
+        ctx.font = "12px 'SF Mono', Consolas, monospace";
         ctx.fillText(`${meta.frame_idx}/${meta.n_frames}`, w - 4, 14);
       }
     };
@@ -326,12 +326,12 @@ class ProbeOverlayRenderer {
 
     // Side labels
     ctx.fillStyle = "#7090a8";
-    ctx.font = `bold ${Math.max(11, w * 0.038)}px Inter, sans-serif`;
+    ctx.font = `bold ${Math.max(14, w * 0.045)}px Inter, sans-serif`;
     ctx.textAlign = "center";
-    ctx.fillText("R", 10, h * 0.48);
-    ctx.fillText("L", w - 10, h * 0.48);
+    ctx.fillText("R", 14, h * 0.48);
+    ctx.fillText("L", w - 14, h * 0.48);
     ctx.fillStyle = "#607888";
-    ctx.font = "9px Inter, sans-serif";
+    ctx.font = "13px Inter, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText("Anterior view", 6, h - 4);
 
@@ -393,7 +393,7 @@ class ProbeOverlayRenderer {
 
     // Lung labels
     ctx.fillStyle = "rgba(90, 160, 200, 0.45)";
-    ctx.font = "9px Inter, sans-serif";
+    ctx.font = "11px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("L lung", cx + bw * 0.45, top + bodyH * 0.38);
     ctx.fillText("R lung", cx - bw * 0.45, top + bodyH * 0.38);
@@ -478,7 +478,7 @@ class ProbeOverlayRenderer {
       // ICS number labels (only for visible ones)
       if (i <= 7 && i >= 2) {
         ctx.fillStyle = "rgba(100, 140, 175, 0.45)";
-        ctx.font = "7px Inter, sans-serif";
+        ctx.font = "12px Inter, sans-serif";
         ctx.textAlign = "right";
         ctx.fillText(`${i}`, cx - bw * 0.08, ry + 3);
       }
@@ -521,7 +521,7 @@ class ProbeOverlayRenderer {
 
     // Label
     ctx.fillStyle = "rgba(200, 150, 90, 0.5)";
-    ctx.font = "8px Inter, sans-serif";
+    ctx.font = "13px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("diaphragm", cx, top + bodyH * 0.76);
   }
@@ -563,7 +563,7 @@ class ProbeOverlayRenderer {
       ctx.stroke();
 
       ctx.fillStyle = "#c0ccd8";
-      ctx.font = `${Math.max(6, r * 0.6)}px Inter, sans-serif`;
+      ctx.font = `bold ${Math.max(9, r * 0.7)}px Inter, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(abbrevs[key] || key.slice(0, 4), zx, zy);
@@ -753,7 +753,7 @@ class ProbeOverlayRenderer {
     ctx.arc(notchP.x, notchP.y, notchR, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#0b0f14";
-    ctx.font = `bold ${Math.max(8, 9 * S)}px Inter, sans-serif`;
+    ctx.font = `bold ${Math.max(11, 12 * S)}px Inter, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("M", notchP.x, notchP.y);
@@ -809,7 +809,7 @@ class ProbeOverlayRenderer {
       ctx.fill();
       // Label
       ctx.fillStyle = color;
-      ctx.font = `bold ${Math.max(10, 12 * S)}px Inter, sans-serif`;
+      ctx.font = `bold ${Math.max(12, 14 * S)}px Inter, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(label, tip.x + Math.cos(dir) * 14 * S, tip.y + Math.sin(dir) * 14 * S);
@@ -871,7 +871,7 @@ class ProbeOverlayRenderer {
 
     // Depth markers along center axis
     ctx.fillStyle = "rgba(90, 158, 192, 0.25)";
-    ctx.font = "6px Inter, sans-serif";
+    ctx.font = "11px Inter, sans-serif";
     ctx.textAlign = "left";
     for (let d = 2; d <= 10; d += 2) {
       const frac = d / 12;
@@ -915,7 +915,7 @@ class ProbeOverlayRenderer {
 
       // Label
       ctx.fillStyle = colors[i];
-      ctx.font = "6px Inter, sans-serif";
+      ctx.font = "11px Inter, sans-serif";
       ctx.textAlign = "left";
       ctx.fillText(labels[i], hw + rollOff + 3, d + 2);
     }
@@ -1375,6 +1375,16 @@ document.addEventListener("DOMContentLoaded", () => {
     _probeMoveThrottle = now;
     if (snappedZone) {
       ws.send({ type: "select_zone", zone: snappedZone });
+      // Auto-play on probe snap to zone
+      if (!isPlaying) {
+        isPlaying = true; isFrozen = false;
+        ws.send({ type: "unfreeze" });
+        ws.send({ type: "play" });
+        document.getElementById("play-btn").innerHTML = "&#9646;&#9646; Pause";
+        document.getElementById("play-btn").classList.add("playing");
+        document.getElementById("freeze-btn").textContent = "Freeze";
+        document.getElementById("freeze-overlay").classList.add("hidden");
+      }
     } else {
       ws.send({ type: "probe_position", nx, ny });
     }
@@ -1463,8 +1473,8 @@ document.addEventListener("DOMContentLoaded", () => {
     ["finding-zone", "finding-pathology", "finding-sliding", "finding-mmode"].forEach(id => document.getElementById(id).textContent = "--");
     document.getElementById("diagnosis-result").textContent = "";
     document.getElementById("frame-slider").value = 0;
-    document.getElementById("frame-counter").textContent = "0/32";
-    document.getElementById("playback-label").textContent = "0/32";
+    document.getElementById("frame-counter").textContent = "--";
+    document.getElementById("playback-label").textContent = "--";
     bmode.ctx.fillStyle = "#000"; bmode.ctx.fillRect(0, 0, bmode.canvas.width, bmode.canvas.height);
     mmode.ctx.fillStyle = "#000"; mmode.ctx.fillRect(0, 0, mmode.canvas.width, mmode.canvas.height);
   }
@@ -1554,19 +1564,29 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Zone click — snap probe to zone on the body diagram too
+  // Zone click — snap probe to zone and auto-play (mimics real ultrasound: always live)
   zoneMap.onZoneClick = (z) => {
     probeOverlay.snapToZone(z);
     if (window.probe3d) window.probe3d.setPosition(probeOverlay.probeNx, probeOverlay.probeNy);
     ws.send({ type: "select_zone", zone: z });
+    // Always start/restart cine loop on zone select (real US is always live)
+    isFrozen = false;
+    document.getElementById("freeze-btn").textContent = "Freeze";
+    document.getElementById("freeze-overlay").classList.add("hidden");
+    isPlaying = true;
+    const btn = document.getElementById("play-btn");
+    ws.send({ type: "unfreeze" });
+    ws.send({ type: "play" });
+    btn.innerHTML = "&#9646;&#9646; Pause";
+    btn.classList.add("playing");
   };
 
   // Playback
   document.getElementById("play-btn").addEventListener("click", () => {
     isPlaying = !isPlaying;
     const btn = document.getElementById("play-btn");
-    if (isPlaying) { ws.send({ type: "play" }); btn.innerHTML = "&#9646;&#9646;"; btn.classList.add("playing"); }
-    else { ws.send({ type: "pause" }); btn.innerHTML = "&#9654;"; btn.classList.remove("playing"); }
+    if (isPlaying) { ws.send({ type: "play" }); btn.innerHTML = "&#9646;&#9646; Pause"; btn.classList.add("playing"); }
+    else { ws.send({ type: "pause" }); btn.innerHTML = "&#9654; Play"; btn.classList.remove("playing"); }
   });
   document.getElementById("frame-slider").addEventListener("input", (e) => ws.send({ type: "set_frame", frame: parseInt(e.target.value) }));
 
@@ -1595,7 +1615,19 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   document.getElementById("scenario-select").addEventListener("change", (e) => {
-    if (!testingMode && e.target.value) ws.send({ type: "set_scenario", scenario: e.target.value });
+    if (!testingMode && e.target.value) {
+      // Stop playback and reset on scenario change
+      if (isPlaying) {
+        isPlaying = false;
+        ws.send({ type: "pause" });
+        document.getElementById("play-btn").innerHTML = "&#9654; Play";
+        document.getElementById("play-btn").classList.remove("playing");
+      }
+      isFrozen = false;
+      document.getElementById("freeze-btn").textContent = "Freeze";
+      document.getElementById("freeze-overlay").classList.add("hidden");
+      ws.send({ type: "set_scenario", scenario: e.target.value });
+    }
   });
 
   // New case
