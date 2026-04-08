@@ -88,8 +88,12 @@ class RealisticLungUSGenerator:
     # Higher values amplify class-specific features (sharper pleural line,
     # more distinct A-lines/B-lines) at the cost of some diversity.
     CLASS_GUIDANCE_SCALE = {
-        0: 5.0,   # Normal: boost pleural line sharpness
-        1: 5.5,   # Pneumothorax: needs very bright, distinct pleural line
+        0: 6.0,   # Normal: strong boost for pleural line sharpness (esp. with fewer DDIM steps)
+        1: 6.0,   # Pneumothorax: very bright, distinct pleural line
+        2: 5.0,   # Focal B-lines: moderate boost for pleural + B-line definition
+        4: 5.0,   # Consolidation: boost for tissue boundary definition
+        7: 5.5,   # Lung point: needs clear sliding/non-sliding boundary
+        8: 5.0,   # Pleural thickening: needs visible (irregular) pleural line
     }
 
     def __init__(

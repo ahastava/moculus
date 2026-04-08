@@ -1,30 +1,32 @@
 # MoCoLUS — Motion-Compensated Lung Ultrasound Simulator
 
-Synthetic lung POCUS training simulator with real-time web-based visualization, BLE probe IMU integration, and clinically accurate pathology rendering. Uses zea DiffusionModel for photorealistic image refinement trained on physics-based clinical frames.
+Synthetic lung POCUS training simulator with real-time web-based visualization, BLE probe IMU integration, and AI-generated ultrasound frames. Uses a ControlNet-guided pixel-space diffusion model trained on ~14,000 real clinical POCUS images to produce photorealistic B-mode and M-mode frames across 10 pathology classes and 15 clinical scenarios.
 
-Runs on the **ThinkStation PX** (`ahastava@thinkstationpgx-9c7e`) — headless aarch64 Ubuntu 24.04, NVIDIA GB10 GPU.
+Runs on the **ThinkStation PX** (`ahastava@thinkstationpgx-9c7e`) — headless aarch64 Ubuntu 24.04, NVIDIA GB10 Blackwell GPU.
+
+> For detailed system architecture, data flow diagrams, and developer onboarding, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
 ## Quick Start
 
-### Option 1: Docker (recommended)
+### Option 1: Docker (recommended for deployment)
 
 ```bash
-# Build and run with GPU support
-docker compose up --build
+# Build CPU image with pre-rendered frame cache (no GPU needed at runtime)
+docker build -f Dockerfile.cpu -t ahastava/moculus:latest .
+
+# Run
+docker run -p 8000:8000 ahastava/moculus:latest
 
 # Open in browser
 open http://localhost:8000
 ```
 
-### Option 2: Local Python
+### Option 2: Local Python (for development)
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Launch web UI
 ./run.sh --web
 # → http://localhost:8000
 ```
@@ -45,12 +47,11 @@ cd ~/moculus
 | Command | What it does |
 |---------|-------------|
 | `./run.sh --web` | **Web UI** on http://localhost:8000 (recommended) |
-| `./run.sh --docker` | Build and run via Docker Compose |
-| `./run.sh --train` | Train zea diffusion model on clinical frames |
+| `./run.sh --docker` | Build and run via Docker Compose (GPU) |
+| `./run.sh --train` | Train ControlNet DDPM on clinical frames |
 | `./run.sh --dataset` | Build HDF5 training dataset |
 | `./run.sh --preview` | Generate training preview images |
-| `./run.sh` | PyQt6 GUI (auto-detect display, legacy) |
-| `./run.sh --vnc` | PyQt6 GUI with VNC (deprecated) |
+| `./run.sh` | PyQt6 GUI (legacy, deprecated) |
 | `./run.sh --help` | Show all options |
 
 ---
@@ -63,100 +64,112 @@ The web UI has two tabs:
 
 - **B-mode / M-mode display** — real-time ultrasound frames streamed at 30fps via WebSocket
 - **Chest zone map** — interactive SVG with 8 BLUE protocol zones (click to examine)
+- **Free probe mode** — drag the probe across the chest; frames interpolate smoothly between zones
 - **Practice mode** — select a scenario, examine zones, see findings in real-time
 - **Test mode** — random hidden case, examine all 8 zones, submit your diagnosis
 - **Patient case** — randomized demographics, vitals, chief complaint, history
 - **Playback** — play/pause, frame slider, freeze
-- **BLE probe** — connect to physical probe via server-side BLE
+- **BLE probe** — connect physical probe via Web Bluetooth for IMU-based navigation
 
 ### Training Studio Tab
 
 - **Train diffusion model** — configure epochs, batch size, image size; real-time loss chart via SSE
 - **Build HDF5 dataset** — generate training data with progress tracking
-- **Generate previews** — pathology grid, B-mode/M-mode grid, scenario views
 - **Checkpoints** — list and manage model checkpoints
 
 ---
 
 ## Train the Diffusion Model
 
+MoCoLUS uses a pixel-space conditional DDPM with ControlNet-style structural guide injection, trained on real clinical POCUS images.
+
 ```bash
-# Quick test (< 5 seconds)
-./run.sh --train --epochs 3 --n-per-class 8 --batch-size 2 --image-size 64 --from-scratch
+# Full training run (from scratch)
+python -m src.train_realistic --epochs 300 --batch-size 8 --lr 1e-4
 
-# Full training run
-./run.sh --train --epochs 100 --batch-size 4
+# Fine-tune from existing checkpoint
+python -m src.train_realistic --resume checkpoints/realistic_v4_ab/best.pt \
+    --finetune --epochs 20 --lr 3e-5
 
-# Train from scratch (no pretrained echonet init)
-./run.sh --train --from-scratch --epochs 200
-
-# Resume from checkpoint
-./run.sh --train --resume checkpoints/zea_lung_pocus/latest.pt
-
-# Generate samples from trained model
-./run.sh --train --sample-only
+# Resume interrupted training
+python -m src.train_realistic --resume checkpoints/realistic_v4_ab/latest.pt
 
 # Run in background (survives SSH disconnect)
-./run.sh --train --epochs 100 --background
+nohup python -u -m src.train_realistic --epochs 300 --batch-size 8 \
+    > checkpoints/training.log 2>&1 & disown
 ```
-
-Or use the **Training Studio** tab in the web UI for training with real-time progress.
 
 ### Training Pipeline
 
 ```
-ClinicalFrameGenerator (numpy/scipy)    →  10 pathologies, fresh each epoch
-        ↓                                  (speckle, noise, augmentation)
-zea DiffusionModel (unet_time_conditional) ←  pretrained from echonet-dynamic
-        ↓                                     (transfer learning: cardiac → lung)
-PyTorch training loop                    →  cosine noise schedule, EMA, AMP
+Real POCUS images (14,258 train / 1,470 val)
         ↓
-checkpoints/zea_lung_pocus/              →  loadable via from_pretrained()
+ClinicalFrameGenerator ──→ Structural guide (physics-based)
         ↓
-Web UI / MoCoLUSLungUSGenerator          →  diffusion sampling + scan conversion
+LesionAnatomyBank ────────→ Real lesion texture + PMF placement (50% prob)
+        ↓
+ControlNetPOCUS (69.2M params)
+  ├── UNet2DModel (denoising path, 1 input channel)
+  ├── GuideEncoder (4-level CNN → multi-scale features)
+  └── Zero-conv injection at every decoder level
+        ↓
+MSE loss on noise prediction + classifier-free guidance (10% dropout)
+        ↓
+Checkpoints:
+  ├── realistic_v4_ab/best.pt    (base model, all pathologies)
+  └── realistic_v2_finetune/     (trauma-specialized: PTX, effusion, lung point)
 ```
+
+### Why Pixel-Space (not Latent)?
+
+The Stable Diffusion VAE is trained on natural photographs. When encoding ultrasound speckle, the decoder produces oil-painting artifacts. Operating in pixel space avoids this entirely.
 
 ---
 
-## Build HDF5 Dataset
+## Frame Cache (Offline Deployment)
+
+For CPU-only deployment (no GPU at runtime), pre-render all frames:
 
 ```bash
-./run.sh --dataset --n-per-class 500 --output data/lung_us_moculus.h5
+# Generate frame cache (all 15 scenarios × 8 zones × 16-32 frames)
+python scripts/smart_cache_gen.py --n-frames 16 --ddim-steps 30
+
+# Monitor progress
+tail -f checkpoints/smart_cache.log
+
+# View visual dashboard
+python scripts/cache_dashboard.py
+# → checkpoints/benchmarks/cache_progress/dashboard.png
 ```
 
-Generates train/val/test splits with paired IMU data and grid cell labels across 4 vehicle motion profiles (static, ambulance, helicopter, highway).
+The cache (`data/frame_cache.npz`) is baked into the Docker CPU image. At runtime, frames load instantly from the cache — no neural network inference needed.
 
 ---
 
 ## Docker
 
-### Build
+### CPU Image (deployment, no GPU required)
 
 ```bash
-docker build -t moculus .
+docker build -f Dockerfile.cpu -t ahastava/moculus:latest .
+docker run -p 8000:8000 ahastava/moculus:latest
 ```
 
-### Run
+Ships with `frame_cache.npz` — all frames pre-rendered on GPU, served from cache at runtime.
+
+### GPU Image (training + live generation)
 
 ```bash
-# With GPU
-docker run --gpus all -p 8000:8000 -v ./checkpoints:/app/checkpoints -v ./data:/app/data moculus
-
-# Or use docker compose
 docker compose up --build
 ```
 
-### Offline Mode
-
-The Docker image contains everything needed to run the simulator without internet:
+### Offline Transfer
 
 ```bash
-# Save image for offline transfer
-docker save moculus | gzip > moculus.tar.gz
-
-# On offline machine
+docker save ahastava/moculus:latest | gzip > moculus.tar.gz
+# On offline machine:
 docker load < moculus.tar.gz
-docker run --gpus all -p 8000:8000 moculus
+docker run -p 8000:8000 ahastava/moculus:latest
 ```
 
 ---
@@ -165,36 +178,22 @@ docker run --gpus all -p 8000:8000 moculus
 
 ### Mode 1: Online — Training & Development
 
-Connect via VS Code Remote SSH or use the web UI directly:
-
 ```bash
-./run.sh --web
-# → http://localhost:8000
+./run.sh --web    # → http://localhost:8000
 ```
 
-Features available in online mode:
-- Train new diffusion models
-- Generate HDF5 datasets
-- Create training previews
-- Full simulator with all scenarios
+Full access: train models, generate datasets, create previews, live diffusion generation.
 
-### Mode 2: Offline — In Ambulance with BLE Probe
+### Mode 2: Offline — Field Use with BLE Probe
 
-Deploy via Docker for field use:
+Deploy via Docker on any machine (laptop, tablet, field workstation):
 
-1. Transfer the Docker image to the field machine
-2. Run: `docker run --gpus all -p 8000:8000 moculus`
-3. Open http://localhost:8000 on any device on the local network
-4. Use the BLE probe section to connect the physical probe
+1. Transfer Docker image
+2. `docker run -p 8000:8000 ahastava/moculus:latest`
+3. Open browser → http://localhost:8000
+4. Connect BLE probe via Web Bluetooth
 
-BLE requires `bleak` and host Bluetooth access. In Docker, use `--privileged` or `--device` flags for Bluetooth.
-
-### Practice vs Testing Mode
-
-| Mode | Use Case |
-|------|----------|
-| **Practice** | Pick a scenario from the dropdown, examine zones, see all findings. Good for learning BLUE protocol. |
-| **Test Me** | Random patient case (hidden scenario). Examine all 8 zones, submit your diagnosis, get instant feedback with BLUE protocol explanation. Each launch generates unique images. |
+All frames served from pre-rendered cache. No GPU, no internet required.
 
 ---
 
@@ -202,30 +201,52 @@ BLE requires `bleak` and host Bluetooth access. In Docker, use `--privileged` or
 
 ```
 moculus/
-  run.sh                          Single entry point for all modes
-  Dockerfile                      Multi-stage Docker build (no VNC/PyQt6 needed)
-  docker-compose.yml              Docker Compose with GPU support
-  requirements.txt                Python dependencies
-  static/
-    index.html                    Web UI (single-page app)
-    style.css                     Dark clinical theme
-    app.js                        Frontend logic (WebSocket, canvas rendering)
+  run.sh                              Single entry point for all modes
+  Dockerfile.cpu                      CPU-only image with frame cache
+  Dockerfile.gpu                      GPU image for training
+  docker-compose.yml                  Docker Compose with GPU support
+  requirements.txt                    Python dependencies
+  ARCHITECTURE.md                     System architecture deep dive
+
   src/
-    web_server.py                 FastAPI server (WebSocket + REST API)
-    clinical_frames.py            Clinically accurate frame generator (10 pathologies)
-    train_zea_diffusion.py        Zea DiffusionModel training on clinical frames
-    train_diffusion.py            Custom U-Net diffusion training (alternative)
-    lung_us_generator.py          Generator with zea diffusion + scan conversion
-    lung_us_dataset.py            HDF5 dataset builder (10 classes + IMU)
-    simulator_bridge.py           GUI ↔ simulator adapter layer
-    poc_image_stack.py            BLUE protocol zones, scenarios, temporal stacks
-    training_preview.py           Matplotlib preview renderer
-  POCUS CEWIT GitLab/
-    ultrasound/US_Image_Reader/GUI/
-      main_simulator.py           Legacy PyQt6 GUI (still available via ./run.sh)
-  .vscode/
-    settings.json                 Python interpreter, env vars
-    launch.json                   Debug configs
+    web_server.py                     FastAPI server (WebSocket + REST)
+    poc_image_stack.py                BLUE protocol zones, scenarios, stack orchestrator
+    clinical_frames.py                Physics-based structural guide generator (10 pathologies)
+    realistic_generator.py            ControlNet DDPM inference wrapper + trauma routing
+    anatomy_bank.py                   Lesion-Anatomy Bank (DiffUltra concept)
+    train_realistic.py                ControlNet DDPM training loop
+    lung_us_generator.py              Legacy zea bridge + IMU/grid dataclasses
+    lung_us_dataset.py                HDF5 dataset builder
+    simulator_bridge.py               GUI adapter layer (legacy)
+    acquire_pocus_data.py             Real POCUS data acquisition pipeline
+    generate_cache.py                 Basic frame cache generator
+
+  scripts/
+    smart_cache_gen.py                Self-correcting cache gen with quality gating
+    cache_dashboard.py                Visual progress dashboard
+    generate_balanced.py              Balanced dataset generation
+    validate_synthetic.py             Synthetic frame quality validation
+    scan_class_balance.py             Class distribution analysis
+    benchmark_integration.py          Physics vs ControlNet comparison
+    benchmark_finetune.py             Model version comparison
+    finetune_trauma.sh                Trauma-specialized fine-tuning script
+
+  static/
+    index.html                        Single-page web app
+    app.js                            Frontend (WebSocket, canvas, BLE, zone map)
+    style.css                         Dark clinical theme
+    probe3d.js                        3D probe visualization (Three.js)
+    probe_mesh.stl                    Probe 3D model
+
+  checkpoints/                        Model weights (gitignored)
+    realistic_v4_ab/best.pt           Production base model
+    realistic_v2_finetune/latest.pt   Trauma-specialized model
+    anatomy_bank.pt                   Lesion texture bank
+
+  data/                               Training data (gitignored)
+    real_pocus/processed/             14,258 labeled clinical frames
+    frame_cache.npz                   Pre-rendered frame cache for Docker
+    DATA_PROVENANCE.md                Complete dataset licensing & attribution
 ```
 
 ---
@@ -241,7 +262,7 @@ moculus/
 | 4 | Consolidation | Tissue-like + air bronchograms | Stratosphere |
 | 5 | Pleural Effusion | Anechoic fluid + quad sign | Seashore |
 | 6 | ARDS / White Lung | Confluent B-lines | Stratosphere |
-| 7 | Lung Point | Sliding ↔ no sliding transition | Mixed |
+| 7 | Lung Point | Sliding / no sliding transition | Mixed |
 | 8 | Pleural Thickening | Irregular pleural line | Seashore |
 | 9 | Interstitial Syndrome | B-lines + subpleural consolidations | Seashore |
 
@@ -272,7 +293,8 @@ moculus/
 ### Using Docker (recommended)
 
 ```bash
-docker compose up --build
+docker build -f Dockerfile.cpu -t ahastava/moculus:latest .
+docker run -p 8000:8000 ahastava/moculus:latest
 ```
 
 ### Manual Setup
