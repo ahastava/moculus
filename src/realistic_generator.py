@@ -520,33 +520,9 @@ class RealisticLungUSGenerator:
 
         stack_data["bmode_stack"] = np.stack(realistic_frames, axis=0)
 
-        # Generate realistic M-mode using trained M-mode embeddings
-        # The model has separate embeddings for M-mode (class + MMODE_CLASS_OFFSET)
-        from .train_realistic import MMODE_CLASS_OFFSET
-
-        # Get synthetic M-mode as structural guide
-        synthetic_mmode = stack_data["mmode"]  # [H, n_frames] from ClinicalTemporalStack
-        from PIL import Image as PILImage
-        mmode_img = PILImage.fromarray(
-            (np.clip(synthetic_mmode, 0, 1) * 255).astype(np.uint8), mode="L"
-        )
-        mmode_arr = np.asarray(
-            mmode_img.resize((self.image_size, self.image_size), PILImage.LANCZOS),
-            dtype=np.float32,
-        ) / 255.0
-
-        mmode_guide = torch.from_numpy(mmode_arr * 2.0 - 1.0).unsqueeze(0).unsqueeze(0).to(self.device)
-        mmode_label = torch.tensor(
-            [pathology_class + MMODE_CLASS_OFFSET], dtype=torch.long, device=self.device
-        )
-
-        mmode_result = sample_images(
-            active_model, self.scheduler, mmode_guide, mmode_label,
-            num_inference_steps=self.num_inference_steps,
-            guidance_scale=self._get_guidance_scale(pathology_class),
-            device=self.device,
-        )
-        mmode_frame = (mmode_result[0, 0].cpu().float() + 1.0) / 2.0
-        stack_data["mmode"] = mmode_frame.clamp(0.0, 1.0).numpy()
+        # M-mode: keep the physics-based output from ClinicalTemporalStack.
+        # It produces clinically accurate seashore/stratosphere patterns directly.
+        # The DDPM M-mode embeddings (trained on ~200 synthetic samples) produce
+        # low-quality output that doesn't resemble real M-mode patterns.
 
         return stack_data
