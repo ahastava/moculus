@@ -54,6 +54,9 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: Clean up old dangling images to save disk space
+docker image prune -f >nul 2>&1
+
 :: Run container
 echo.
 echo  Starting MoCoLUS...

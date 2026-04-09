@@ -7,7 +7,8 @@
 # Usage:
 #   ./moculus.sh start     Start the simulator
 #   ./moculus.sh stop      Stop the simulator
-#   ./moculus.sh update    Pull latest version and restart
+#   ./moculus.sh update    Pull latest version, restart, and clean old images
+#   ./moculus.sh clean     Remove dangling images and stopped containers
 #   ./moculus.sh status    Check if running
 #   ./moculus.sh           Same as start
 
@@ -42,8 +43,16 @@ case "${1:-start}" in
         docker stop "$NAME" 2>/dev/null
         docker rm "$NAME" 2>/dev/null
         docker run -d --name "$NAME" -p ${PORT}:8000 --restart unless-stopped "$IMAGE"
+        echo "Cleaning up old images..."
+        docker image prune -f >/dev/null
         echo ""
         echo "  Updated and running at: http://localhost:${PORT}"
+        ;;
+    clean)
+        echo "Removing dangling images and stopped containers..."
+        docker container prune -f
+        docker image prune -f
+        echo "Done."
         ;;
     status)
         if docker ps --format '{{.Names}}' | grep -q "^${NAME}$"; then
@@ -54,6 +63,6 @@ case "${1:-start}" in
         fi
         ;;
     *)
-        echo "Usage: ./moculus.sh [start|stop|update|status]"
+        echo "Usage: ./moculus.sh [start|stop|update|clean|status]"
         ;;
 esac
