@@ -91,6 +91,27 @@ class Pathology(IntEnum):
 
 
 # ---------------------------------------------------------------------------
+# Zone → ZoneRegion mapping
+# ---------------------------------------------------------------------------
+# Translates the 8 BLUE protocol LungZones into the 7 anatomical
+# ZoneRegions used by the structural guide generator and the model's
+# zone_embedding. Upper BLUE zones (L/R) collapse to a single
+# UPPER_GENERIC slot since they share anatomy. Integer values match
+# the ZoneRegion enum in clinical_frames.py — DO NOT renumber.
+
+ZONE_REGION_MAP: Dict[LungZone, int] = {
+    LungZone.UPPER_BLUE_L:  0,  # ZoneRegion.UPPER_GENERIC
+    LungZone.UPPER_BLUE_R:  0,  # ZoneRegion.UPPER_GENERIC
+    LungZone.LOWER_BLUE_L:  1,  # ZoneRegion.LOWER_BLUE_L
+    LungZone.LOWER_BLUE_R:  2,  # ZoneRegion.LOWER_BLUE_R
+    LungZone.PLAPS_L:       3,  # ZoneRegion.PLAPS_L
+    LungZone.PLAPS_R:       4,  # ZoneRegion.PLAPS_R
+    LungZone.DIAPHRAGM_L:   5,  # ZoneRegion.DIAPHRAGM_L
+    LungZone.DIAPHRAGM_R:   6,  # ZoneRegion.DIAPHRAGM_R
+}
+
+
+# ---------------------------------------------------------------------------
 # Chest Wall Coordinate Map
 # ---------------------------------------------------------------------------
 
@@ -1162,11 +1183,25 @@ class POCImageStackGenerator:
         pathology_class: int,
         lung_sliding: bool,
         seed: Optional[int] = None,
+        zone_region: Optional[int] = None,
     ) -> Optional[Dict]:
         """Generate a full stack using the ControlNet DDPM pipeline.
 
         Returns the stack dict from RealisticLungUSGenerator.generate_stack(),
-        or None if the realistic generator is unavailable."""
+        or None if the realistic generator is unavailable.
+
+        Args:
+            pathology_class: ClinicalPathology integer (0-9).
+            lung_sliding:    Whether the M-mode should show sliding (seashore)
+                             or no-sliding (stratosphere).
+            seed:            Reproducibility seed.
+            zone_region:     Optional anatomical zone region (0-6). When None
+                             or 0 (UPPER_GENERIC), the legacy class-only
+                             pipeline runs and outputs are bit-identical to
+                             pre-Phase-1 behavior. When 1-6, the structural
+                             guide gains diaphragmatic anatomy and the model
+                             receives a non-null zone_embedding.
+        """
         if self._realistic_gen is None:
             return None
         try:
@@ -1175,6 +1210,7 @@ class POCImageStackGenerator:
                 n_frames=self.stack_cfg.n_frames,
                 lung_sliding=lung_sliding,
                 seed=seed,
+                zone_region=zone_region,
             )
         except Exception as e:
             print(f"[MoCoLUS] Realistic generation failed: {e}")
@@ -1225,11 +1261,17 @@ class POCImageStackGenerator:
         pathology = self.scenario.get_pathology(zone)
         sliding = self.scenario.has_sliding(zone)
 
+        # Translate the LungZone enum into a ZoneRegion integer for the
+        # zone-aware structural guide and zone_embedding. Default to 0
+        # (UPPER_GENERIC) for any zone not in the map → legacy behavior.
+        zone_region = ZONE_REGION_MAP.get(zone, 0)
+
         # Try ControlNet DDPM pipeline (class-conditioned + anatomy bank)
         realistic = self._generate_realistic_stack(
             pathology_class=int(pathology),
             lung_sliding=sliding,
             seed=seed,
+            zone_region=zone_region,
         )
 
         if realistic is not None:

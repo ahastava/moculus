@@ -60,6 +60,13 @@ MMODE_CLASS_OFFSET = 11   # M-mode class n = n + 11 (classes 11-20)
 NULL_CLASS = 21            # Unconditional class for classifier-free guidance
 NUM_EMBEDDINGS = 22        # 10 bmode + 10 mmode + 1 null + 1 gap(10)
 
+# Zone-region conditioning (Phase 1: zero-init no-op; Phase 5: LoRA-tuned).
+# The integer values match `ZoneRegion` in clinical_frames.py — DO NOT
+# renumber, the on-disk metadata column and the trained zone_embedding
+# both depend on these.
+NUM_ZONE_REGIONS = 9       # 7 region slots (0-6) + 1 null + 1 gap
+ZONE_REGION_NULL = 7       # CFG dropout slot for the zone embedding
+
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
 
@@ -387,15 +394,34 @@ class EMAModel:
             self.shadow[name].lerp_(param.data, 1.0 - self.decay)
 
     def apply(self, model: nn.Module):
-        """Copy EMA weights into model (for inference)."""
+        """Copy EMA weights into model (for inference).
+
+        Skips any model parameters not present in the shadow dict —
+        this lets us load a pre-zone-aware checkpoint into a model that
+        has new parameters (e.g. `zone_embedding.weight`) without
+        clobbering their initial values. Mirrors PyTorch's `strict=False`
+        load semantics.
+        """
         for name, param in model.named_parameters():
-            param.data.copy_(self.shadow[name])
+            shadow = self.shadow.get(name)
+            if shadow is None:
+                continue  # New param not present in old checkpoint — keep init
+            param.data.copy_(shadow)
 
     def state_dict(self):
         return {k: v.clone() for k, v in self.shadow.items()}
 
     def load_state_dict(self, state_dict):
-        self.shadow = {k: v.clone() for k, v in state_dict.items()}
+        """Merge incoming state dict into the shadow rather than replacing it.
+
+        This preserves any new parameters that exist on the live model but
+        weren't in the checkpoint (e.g. `zone_embedding.weight` added in
+        Phase 1). Without the merge, those new params would be silently
+        dropped and the matching `apply()` call would have nothing to
+        copy from.
+        """
+        for k, v in state_dict.items():
+            self.shadow[k] = v.clone()
 
 
 # ── ControlNet Model ─────────────────────────────────────────────────────────
@@ -485,7 +511,12 @@ class ControlNetPOCUS(nn.Module):
         noise_pred = model(noisy_image, timestep, class_labels, guide)
     """
 
-    def __init__(self, image_size: int = 256, num_class_embeds: int = NUM_EMBEDDINGS):
+    def __init__(
+        self,
+        image_size: int = 256,
+        num_class_embeds: int = NUM_EMBEDDINGS,
+        num_zone_regions: int = NUM_ZONE_REGIONS,
+    ):
         super().__init__()
         from diffusers import UNet2DModel
 
@@ -530,13 +561,29 @@ class ControlNetPOCUS(nn.Module):
         # Mid-block zero conv
         self.mid_zero_conv = ZeroConv(self.block_out_channels[-1])
 
-    def forward(self, sample, timestep, class_labels=None, guide=None):
+        # ── Zone-region embedding ──
+        # Additive to the class embedding inside `forward`. Initialised to
+        # ZERO so that loading a pre-zone-aware checkpoint with
+        # `strict=False` produces bit-identical outputs for any zone label
+        # (including the new lower-zone slots). Phase 5 LoRA training will
+        # learn deltas from this identity. Read the actual time-embed dim
+        # from the constructed UNet so we don't hardcode the value across
+        # diffusers versions.
+        time_embed_dim = self.unet.time_embedding.linear_2.out_features
+        self.zone_embedding = nn.Embedding(num_zone_regions, time_embed_dim)
+        nn.init.zeros_(self.zone_embedding.weight)
+
+    def forward(self, sample, timestep, class_labels=None, guide=None, zone_labels=None):
         """
         Args:
             sample:       [B, 1, H, W] noisy image
             timestep:     [B] diffusion timestep
             class_labels: [B] pathology class (0-9 bmode, 11-20 mmode, 21 null)
             guide:        [B, 1, H, W] structural guide from clinical_frames.py
+            zone_labels:  Optional [B] anatomical zone region (0-6 valid, 7
+                          for CFG null). When None or all zeros, the zone
+                          embedding is a no-op (zero vector by initialization
+                          on a fresh model; learned delta after Phase 5 LoRA).
 
         Returns:
             Object with .sample = [B, 1, H, W] predicted noise
@@ -563,6 +610,13 @@ class ControlNetPOCUS(nn.Module):
         if self.unet.class_embedding is not None and class_labels is not None:
             class_emb = self.unet.class_embedding(class_labels)
             emb = emb + class_emb
+
+        # Zone-region conditioning: additive on top of class+time embedding.
+        # Defaults to a zero embedding (no-op) when not provided. Loading an
+        # old checkpoint with `strict=False` keeps zone_embedding zero-init,
+        # so this branch is a perfect identity until Phase 5 trains it.
+        if zone_labels is not None:
+            emb = emb + self.zone_embedding(zone_labels)
 
         # Initial convolution
         sample = self.unet.conv_in(sample)
@@ -694,6 +748,7 @@ def sample_images(
     num_inference_steps: int = 50,
     guidance_scale: float = 4.0,
     device: str = "cuda",
+    zone_labels: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
     Generate realistic POCUS frames using DDIM sampling with CFG.
@@ -707,6 +762,12 @@ def sample_images(
                            class conditioning. 3-5 works well for medical images
                            (higher values exaggerate class features)
         device:             Target device
+        zone_labels:        Optional [B] anatomical zone region indices (0-6).
+                           When None, the model is called without zone
+                           conditioning (legacy bit-identical behavior).
+                           When provided, the conditional branch passes the
+                           supplied zones and the unconditional branch uses
+                           ZONE_REGION_NULL for CFG dropout.
 
     Returns:
         [B, 1, H, W] tensor of generated images in [-1, 1]
@@ -720,6 +781,11 @@ def sample_images(
 
     # Null class labels for unconditional branch of CFG
     null_labels = torch.full((B,), NULL_CLASS, dtype=torch.long, device=device)
+    null_zone_labels = (
+        torch.full((B,), ZONE_REGION_NULL, dtype=torch.long, device=device)
+        if zone_labels is not None
+        else None
+    )
 
     scheduler.set_timesteps(num_inference_steps, device=device)
 
@@ -727,11 +793,21 @@ def sample_images(
         timestep = t.expand(B)
 
         # Conditional: noisy image + structural guide (ControlNet injection)
-        noise_pred_cond = model(images, timestep, class_labels=class_labels, guide=structural_guides).sample
+        noise_pred_cond = model(
+            images, timestep,
+            class_labels=class_labels,
+            guide=structural_guides,
+            zone_labels=zone_labels,
+        ).sample
 
         if guidance_scale > 1.0:
-            # Unconditional: no guide, null class
-            noise_pred_uncond = model(images, timestep, class_labels=null_labels, guide=None).sample
+            # Unconditional: no guide, null class, null zone
+            noise_pred_uncond = model(
+                images, timestep,
+                class_labels=null_labels,
+                guide=None,
+                zone_labels=null_zone_labels,
+            ).sample
 
             # CFG interpolation
             noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
@@ -955,6 +1031,9 @@ def train(
     finetune: bool = False,
     sample_every: int = 10,
     save_every: int = 25,
+    lora: bool = False,
+    lora_rank: int = 16,
+    lora_alpha: int = 32,
 ):
     """
     Main training loop.
@@ -964,6 +1043,14 @@ def train(
         null class (unconditional). Independently, with the same probability,
         the structural guide channel is zeroed. This teaches the model to
         generate both with and without conditioning, enabling CFG at inference.
+
+    LoRA fine-tuning (lora=True):
+        After loading the resume checkpoint, the model is wrapped with
+        rank-`lora_rank` LoRA adapters on every attention Linear and
+        time_emb_proj layer (~0.74M trainable params at rank 16). The
+        optimizer is rebuilt over LoRA + zone_embedding params only,
+        and a LoRA-only delta (~3 MB) is saved as `latest_lora.pt`
+        alongside the full checkpoint each epoch.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     output_path = _ROOT / output_dir
@@ -1025,7 +1112,16 @@ def train(
     best_val_loss = float("inf")
     if resume_path:
         ckpt = torch.load(_ROOT / resume_path, map_location=device, weights_only=False)
-        model.load_state_dict(ckpt["model"])
+        # strict=False so we can resume into a model that has the new
+        # zone_embedding parameter while loading a pre-Phase-1 checkpoint.
+        # The merged EMAModel.load_state_dict (also strict-tolerant) handles
+        # the same case for the EMA shadow.
+        miss, unex = model.load_state_dict(ckpt["model"], strict=False)
+        if miss or unex:
+            logger.info(
+                f"Resume loaded with strict=False (missing={len(miss)}, unexpected={len(unex)}). "
+                f"This is expected when adding zone_embedding to a pre-zone checkpoint."
+            )
         if "ema" in ckpt:
             ema.load_state_dict(ckpt["ema"])
         if finetune:
@@ -1040,6 +1136,41 @@ def train(
             start_epoch = ckpt.get("epoch", 0) + 1
             best_val_loss = ckpt.get("best_val_loss", float("inf"))
             logger.info(f"Resumed from epoch {start_epoch}")
+
+    # ── LoRA injection (zone-aware fine-tune path) ──
+    # Must happen AFTER the base checkpoint is loaded so the LoRA wrappers
+    # see the correct base weights. Rebuilds the optimizer over only the
+    # LoRA + zone_embedding params (~1% of the total) so the AdamW state
+    # stays tiny and training is fast.
+    lora_active = bool(lora)
+    if lora_active:
+        from .lora import (
+            inject_lora,
+            mark_only_lora_as_trainable,
+            print_trainable_parameters,
+        )
+
+        matched = inject_lora(model, rank=lora_rank, alpha=lora_alpha)
+        logger.info(f"LoRA injected into {len(matched)} Linear layers (rank={lora_rank}, alpha={lora_alpha})")
+
+        trainable_count, total_count = mark_only_lora_as_trainable(
+            model, train_zone_embed=True
+        )
+        print_trainable_parameters(model)
+
+        # Rebuild optimizer over trainable params only — the LoRA delta
+        # tolerates a higher LR than full fine-tuning thanks to the
+        # implicit low-rank regularization.
+        optimizer = torch.optim.AdamW(
+            [p for p in model.parameters() if p.requires_grad],
+            lr=lr,
+            weight_decay=0.01,
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+        # Use a faster-adapting EMA for small-data fine-tuning. Default
+        # 0.9999 is too slow when only ~500-1000 new samples are added.
+        ema = EMAModel(model, decay=0.999)
 
     # Training
     for epoch in range(start_epoch, epochs):
@@ -1180,14 +1311,41 @@ def train(
                 "batch_size": batch_size,
                 "lr": lr,
                 "cfg_dropout": cfg_dropout,
+                "lora": lora_active,
+                "lora_rank": lora_rank if lora_active else None,
+                "lora_alpha": lora_alpha if lora_active else None,
             },
         }
         torch.save(ckpt, output_path / "latest.pt")
+
+        # When training with LoRA, also save a tiny delta-only checkpoint
+        # (~3 MB) that can be shipped without the full ~300 MB base model.
+        if lora_active:
+            from .lora import lora_state_dict
+            delta = lora_state_dict(model)
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "lora_state_dict": delta,
+                    "config": ckpt["config"],
+                },
+                output_path / "latest_lora.pt",
+            )
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val
             ckpt["best_val_loss"] = best_val_loss
             torch.save(ckpt, output_path / "best.pt")
+            if lora_active:
+                from .lora import lora_state_dict
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "lora_state_dict": lora_state_dict(model),
+                        "config": ckpt["config"],
+                    },
+                    output_path / "best_lora.pt",
+                )
             logger.info(f"  ★ New best val_loss={best_val_loss:.5f}")
 
     logger.info("Training complete.")
@@ -1209,6 +1367,28 @@ def main():
                         help="Load model/EMA weights from --resume but reset epoch, optimizer, and LR schedule")
     parser.add_argument("--sample-every", type=int, default=5)
     parser.add_argument("--save-every", type=int, default=25)
+    parser.add_argument(
+        "--lora",
+        action="store_true",
+        help=(
+            "Train only LoRA adapters + zone_embedding instead of full model. "
+            "Requires --resume to load a base checkpoint. Use for the Phase 5 "
+            "zone-aware fine-tune where ~0.74M trainable params on top of the "
+            "frozen ~69M base is enough to learn zone-region deltas."
+        ),
+    )
+    parser.add_argument(
+        "--lora-rank",
+        type=int,
+        default=16,
+        help="LoRA rank (default 16). Higher → more capacity, larger delta.",
+    )
+    parser.add_argument(
+        "--lora-alpha",
+        type=int,
+        default=32,
+        help="LoRA alpha scaling factor (default 32 = 2*rank).",
+    )
     args = parser.parse_args()
 
     # Ensure output dir exists before setting up log file
@@ -1237,6 +1417,9 @@ def main():
         finetune=args.finetune,
         sample_every=args.sample_every,
         save_every=args.save_every,
+        lora=args.lora,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
     )
 
 

@@ -470,6 +470,18 @@ def main():
                         help="Max retries per failed zone (default: 1)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from data/frame_cache_partial.npz, skipping completed scenarios")
+    parser.add_argument(
+        "--only-zones",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of LungZone names to regenerate (e.g. "
+            "'LOWER_BLUE_L,LOWER_BLUE_R,PLAPS_L,PLAPS_R,DIAPHRAGM_L,DIAPHRAGM_R'). "
+            "When set, all OTHER zones in the existing cache are preserved "
+            "byte-for-byte — required for diaphragm-update runs that must "
+            "leave upper BLUE zones untouched."
+        ),
+    )
     args = parser.parse_args()
 
     n_frames = args.n_frames
@@ -479,6 +491,23 @@ def main():
     output_path = ROOT / "data" / "frame_cache.npz"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     dashboard_path = PROGRESS_DIR / "dashboard.png"
+
+    # Parse --only-zones into a frozenset of LungZone members for fast lookup.
+    # When provided, also pre-load the existing cache so untouched zones are
+    # preserved when we write the merged result back to disk.
+    if args.only_zones:
+        requested = {z.strip().upper() for z in args.only_zones.split(",") if z.strip()}
+        valid_names = {z.name for z in LungZone}
+        unknown = requested - valid_names
+        if unknown:
+            raise SystemExit(
+                f"--only-zones: unknown LungZone names {sorted(unknown)}. "
+                f"Valid: {sorted(valid_names)}"
+            )
+        only_zones = frozenset(LungZone[name] for name in requested)
+        print(f"Filtered run: regenerating only {sorted(z.name for z in only_zones)}")
+    else:
+        only_zones = None
 
     cfg = StackConfig(n_frames=n_frames, image_size=(image_size, image_size))
 
@@ -501,6 +530,22 @@ def main():
             completed_scenarios = set(k.split("/")[0] for k in cache if k.endswith("/bmode"))
             n_resumed = len([k for k in cache if k.endswith("/bmode")])
             print(f"  Resumed {n_resumed} zones from {len(completed_scenarios)} scenarios: {sorted(completed_scenarios)}")
+
+    # Filtered run: pre-load the existing full cache so untouched zones are
+    # preserved byte-for-byte in the merged output. Without this step, only
+    # the regenerated zones would end up in the final NPZ and the upper-zone
+    # entries would be lost. We do NOT mark the existing scenarios as
+    # "completed" — the inner loop still walks every scenario but skips
+    # non-matching zones below.
+    if only_zones is not None and output_path.exists():
+        existing = np.load(str(output_path), allow_pickle=True)
+        preserved = 0
+        for key in existing.files:
+            if key in cache:
+                continue  # already resumed
+            cache[key] = existing[key]
+            preserved += 1
+        print(f"  Preserved {preserved} entries from existing {output_path.name}")
 
     zone_results = []
     all_zones_data = []
@@ -557,6 +602,11 @@ def main():
         scen_start = time.time()
 
         for zone in LungZone:
+            # Filtered run: skip zones outside --only-zones. The existing
+            # cache entry for this zone (loaded above) is preserved as-is.
+            if only_zones is not None and zone not in only_zones:
+                continue
+
             t0 = time.time()
             anchor = gen.zone_resolver.get_anchor(zone)
             probe = ProbeReading(x_m=anchor.x_m, y_m=anchor.y_m, pressure=1.0)

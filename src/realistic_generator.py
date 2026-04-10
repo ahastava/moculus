@@ -84,6 +84,10 @@ class RealisticLungUSGenerator:
     # Trauma classes routed to the fine-tuned model
     TRAUMA_CLASSES = {1, 5, 7}
 
+    # ZoneRegion integers (1-6) routed to the diaphragm-aware fine-tune
+    # when one is loaded. Mirrors LOWER_ZONE_REGIONS in clinical_frames.py.
+    LOWER_ZONE_REGIONS = frozenset({1, 2, 3, 4, 5, 6})
+
     # Per-class guidance scale overrides.
     # Higher values amplify class-specific features (sharper pleural line,
     # more distinct A-lines/B-lines) at the cost of some diversity.
@@ -106,11 +110,13 @@ class RealisticLungUSGenerator:
         guidance_scale: float = 4.0,
         num_inference_steps: int = 50,
         trauma_model=None,
+        diaphragm_model=None,
         anatomy_bank=None,
         anatomy_blend: float = 0.35,
     ):
         self.model = model
         self.trauma_model = trauma_model
+        self.diaphragm_model = diaphragm_model
         self.scheduler = scheduler
         self.device = device
         self.image_size = image_size
@@ -124,8 +130,24 @@ class RealisticLungUSGenerator:
             guide_gen = ClinicalFrameGenerator(image_size=(image_size, image_size))
         self.guide_gen = guide_gen
 
-    def _select_model(self, pathology_class: int):
-        """Return the best model for a given pathology class."""
+    def _select_model(self, pathology_class: int, zone_region: Optional[int] = None):
+        """
+        Return the best model for a given (pathology_class, zone_region).
+
+        Three-tier dispatch:
+            1. Lower zone (1-6) AND diaphragm_model loaded → diaphragm_model
+            2. Trauma class (1, 5, 7) AND trauma_model loaded → trauma_model
+            3. Otherwise → base model
+
+        Upper zones (zone_region in {None, 0}) NEVER touch the diaphragm
+        model — this is the regression-safety guarantee for upper BLUE.
+        """
+        if (
+            self.diaphragm_model is not None
+            and zone_region is not None
+            and zone_region in self.LOWER_ZONE_REGIONS
+        ):
+            return self.diaphragm_model
         if self.trauma_model is not None and pathology_class in self.TRAUMA_CLASSES:
             return self.trauma_model
         return self.model
@@ -167,6 +189,7 @@ class RealisticLungUSGenerator:
         cls,
         model_path: str,
         trauma_model_path: Optional[str] = None,
+        diaphragm_model_path: Optional[str] = None,
         anatomy_bank_path: Optional[str] = None,
         device: Optional[str] = None,
         guidance_scale: float = 4.0,
@@ -182,6 +205,12 @@ class RealisticLungUSGenerator:
                                If provided, classes 1 (pneumothorax), 5 (effusion/
                                hemothorax), and 7 (lung point) are routed to this
                                model. All other classes use the base model.
+            diaphragm_model_path: Optional path to the zone-aware fine-tuned
+                               checkpoint produced by the LoRA training run
+                               (Phase 5). When provided, frames generated for
+                               lower BLUE / PLAPS / Diaphragm zones are routed
+                               here. Upper zones never use it. Setting this to
+                               None preserves the legacy two-tier routing.
             anatomy_bank_path: Optional path to Lesion-Anatomy Bank (.pt).
                                When provided, structural guides are enhanced with
                                real lesion textures placed via PMF conditioning
@@ -239,6 +268,15 @@ class RealisticLungUSGenerator:
                         f"{cls.TRAUMA_CLASSES} → {trauma_model_path}"
                     )
 
+            diaphragm_model = None
+            if diaphragm_model_path:
+                diaphragm_model, _ = cls._load_checkpoint(diaphragm_model_path, device)
+                if diaphragm_model is not None:
+                    logger.info(
+                        f"Zone-aware routing enabled: lower zones "
+                        f"{sorted(cls.LOWER_ZONE_REGIONS)} → {diaphragm_model_path}"
+                    )
+
             scheduler = create_inference_scheduler()
 
             return cls(
@@ -249,6 +287,7 @@ class RealisticLungUSGenerator:
                 guidance_scale=guidance_scale,
                 num_inference_steps=num_inference_steps,
                 trauma_model=trauma_model,
+                diaphragm_model=diaphragm_model,
                 anatomy_bank=anatomy_bank,
                 anatomy_blend=anatomy_blend,
             )
@@ -269,6 +308,7 @@ class RealisticLungUSGenerator:
         guide: np.ndarray,
         pathology_class: int,
         seed: Optional[int] = None,
+        zone_region: Optional[int] = None,  # noqa: ARG002 — Phase 4 will use this
     ) -> np.ndarray:
         """
         Enhance a structural guide with real lesion textures from the
@@ -277,6 +317,10 @@ class RealisticLungUSGenerator:
         This implements DiffUltra's core insight: structural guides that
         incorporate real tissue textures at anatomically plausible positions
         produce more realistic DDPM outputs than pure physics-based guides.
+
+        zone_region is accepted for forward-compatibility with the
+        DiaphragmAnatomyBank that Phase 4 will introduce. The current
+        LesionAnatomyBank ignores it (class-only sampling).
         """
         if self.anatomy_bank is None:
             return guide
@@ -329,24 +373,34 @@ class RealisticLungUSGenerator:
         self,
         pathology_class: int,
         seed: Optional[int] = None,
+        zone_region: Optional[int] = None,
     ) -> np.ndarray:
         """
         Generate a single realistic POCUS frame.
 
         Args:
             pathology_class: MoCoLUS pathology class (0-9)
-            seed:           Random seed for reproducibility
+            seed:            Random seed for reproducibility
+            zone_region:     Optional anatomical zone region (0-6). When None
+                             or 0 (UPPER_GENERIC), the legacy class-only
+                             pipeline runs unchanged. When 1-6, the structural
+                             guide gains diaphragmatic anatomy and the model
+                             receives a zone_embedding.
 
         Returns:
             [H, W] float32 array in [0, 1]
         """
         from .clinical_frames import ClinicalPathology
 
-        # Generate structural guide
-        guide = self.guide_gen.generate(ClinicalPathology(pathology_class), seed=seed)
+        # Generate structural guide (zone_region=None preserves legacy behavior)
+        guide = self.guide_gen.generate(
+            ClinicalPathology(pathology_class), seed=seed, zone_region=zone_region
+        )
 
         # Enhance with anatomy bank textures + PMF placement
-        guide = self._enhance_guide_with_anatomy(guide, pathology_class, seed=seed)
+        guide = self._enhance_guide_with_anatomy(
+            guide, pathology_class, seed=seed, zone_region=zone_region
+        )
 
         if not self.has_model:
             return guide  # Physics-only fallback
@@ -357,9 +411,12 @@ class RealisticLungUSGenerator:
 
         guide_t = torch.from_numpy(guide * 2.0 - 1.0).unsqueeze(0).unsqueeze(0).to(self.device)
         labels = torch.tensor([pathology_class], dtype=torch.long, device=self.device)
+        zone_labels = torch.tensor(
+            [zone_region or 0], dtype=torch.long, device=self.device
+        )
 
         from .train_realistic import sample_images
-        active_model = self._select_model(pathology_class)
+        active_model = self._select_model(pathology_class, zone_region)
         result = sample_images(
             active_model,
             self.scheduler,
@@ -368,6 +425,7 @@ class RealisticLungUSGenerator:
             num_inference_steps=self.num_inference_steps,
             guidance_scale=self._get_guidance_scale(pathology_class),
             device=self.device,
+            zone_labels=zone_labels,
         )
 
         # Convert back to [0, 1] numpy
@@ -380,6 +438,7 @@ class RealisticLungUSGenerator:
         pathology_class: int,
         batch_size: int = 8,
         seed: Optional[int] = None,
+        zone_region: Optional[int] = None,
     ) -> np.ndarray:
         """
         Generate a batch of frames for the same pathology.
@@ -400,8 +459,11 @@ class RealisticLungUSGenerator:
             g = self.guide_gen.generate(
                 ClinicalPathology(pathology_class),
                 seed=frame_seed,
+                zone_region=zone_region,
             )
-            g = self._enhance_guide_with_anatomy(g, pathology_class, seed=frame_seed)
+            g = self._enhance_guide_with_anatomy(
+                g, pathology_class, seed=frame_seed, zone_region=zone_region
+            )
             guides.append(g)
 
         if not self.has_model:
@@ -414,9 +476,12 @@ class RealisticLungUSGenerator:
             np.stack(guides, axis=0)[:, np.newaxis] * 2.0 - 1.0
         ).float().to(self.device)
         labels = torch.full((batch_size,), pathology_class, dtype=torch.long, device=self.device)
+        zone_labels = torch.full(
+            (batch_size,), zone_region or 0, dtype=torch.long, device=self.device
+        )
 
         from .train_realistic import sample_images
-        active_model = self._select_model(pathology_class)
+        active_model = self._select_model(pathology_class, zone_region)
         result = sample_images(
             active_model,
             self.scheduler,
@@ -425,6 +490,7 @@ class RealisticLungUSGenerator:
             num_inference_steps=self.num_inference_steps,
             guidance_scale=self._get_guidance_scale(pathology_class),
             device=self.device,
+            zone_labels=zone_labels,
         )
 
         frames = (result[:, 0].cpu().float() + 1.0) / 2.0
@@ -437,6 +503,7 @@ class RealisticLungUSGenerator:
         n_frames: int = 32,
         lung_sliding: bool = True,
         seed: Optional[int] = None,
+        zone_region: Optional[int] = None,
     ) -> Dict:
         """
         Generate a temporally coherent B-mode stack with M-mode.
@@ -448,6 +515,17 @@ class RealisticLungUSGenerator:
           (noise_perturbation_scale=0.05) so the speckle pattern evolves
           smoothly rather than jumping between independent samples
 
+        Args:
+            pathology_class: ClinicalPathology integer (0-9).
+            n_frames:        Number of B-mode frames in the cine loop.
+            lung_sliding:    Whether to apply seashore (True) vs stratosphere
+                             (False) temporal motion.
+            seed:            Reproducibility seed.
+            zone_region:     Optional anatomical zone region (0-6). When None
+                             or 0, behavior is bit-identical to legacy. When
+                             1-6, the structural guide gains diaphragmatic
+                             anatomy and the model receives a zone_embedding.
+
         Returns dict with:
             bmode_stack:     [N, H, W] float32 in [0, 1]
             mmode:           [H, W] float32 in [0, 1]
@@ -456,7 +534,11 @@ class RealisticLungUSGenerator:
         """
         from .clinical_frames import ClinicalPathology, ClinicalFrameGenerator, ClinicalTemporalStack
 
-        # Generate structural guide stack with temporal motion
+        # Generate structural guide stack with temporal motion.
+        # NOTE: ClinicalTemporalStack does not currently accept zone_region,
+        # so we override the per-frame guide with a zone-aware regenerated
+        # version below. This keeps the temporal-motion logic untouched while
+        # still injecting diaphragmatic anatomy when zone_region > 0.
         frame_gen = ClinicalFrameGenerator(
             image_size=(self.image_size, self.image_size)
         )
@@ -470,12 +552,25 @@ class RealisticLungUSGenerator:
             seed=seed,
         )
 
+        # Re-render each frame's guide with zone awareness if requested.
+        # When zone_region is None/0, the underlying generate() returns the
+        # bit-identical legacy frame, so this is a no-op for upper zones.
+        if zone_region is not None and zone_region != 0:
+            for i in range(n_frames):
+                frame_seed = (seed + i * 1000) if seed is not None else None
+                stack_data["bmode_stack"][i] = frame_gen.generate(
+                    ClinicalPathology(pathology_class),
+                    seed=frame_seed,
+                    zone_region=zone_region,
+                )
+
         # Enhance each frame's guide with anatomy bank textures
         if self.anatomy_bank is not None:
             for i in range(n_frames):
                 frame_seed = (seed + i * 100) if seed is not None else None
                 stack_data["bmode_stack"][i] = self._enhance_guide_with_anatomy(
-                    stack_data["bmode_stack"][i], pathology_class, seed=frame_seed,
+                    stack_data["bmode_stack"][i], pathology_class,
+                    seed=frame_seed, zone_region=zone_region,
                 )
 
         if not self.has_model:
@@ -493,9 +588,12 @@ class RealisticLungUSGenerator:
 
         realistic_frames = []
         labels = torch.tensor([pathology_class], dtype=torch.long, device=self.device)
+        zone_labels = torch.tensor(
+            [zone_region or 0], dtype=torch.long, device=self.device
+        )
 
         from .train_realistic import sample_images
-        active_model = self._select_model(pathology_class)
+        active_model = self._select_model(pathology_class, zone_region)
 
         for i in range(n_frames):
             guide_t = torch.from_numpy(
@@ -513,6 +611,7 @@ class RealisticLungUSGenerator:
                 num_inference_steps=self.num_inference_steps,
                 guidance_scale=self._get_guidance_scale(pathology_class),
                 device=self.device,
+                zone_labels=zone_labels,
             )
 
             frame = (result[0, 0].cpu().float() + 1.0) / 2.0
