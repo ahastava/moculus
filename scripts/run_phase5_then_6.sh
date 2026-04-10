@@ -16,12 +16,20 @@
 # output. Logs are tee'd to checkpoints/phase56_run.log so you can
 # inspect them after the fact.
 #
-# Total expected wall-clock on GB10:
-#   Phase 5 (LoRA fine-tune):  ~4 hours
-#   Phase 6 (cache regen):     ~2 hours
-#   Phase 7 (docker build):    ~10-30 minutes
+# Total expected wall-clock on GB10 (revised after measuring 0.60 steps/s
+# steady state on the actual hardware, vs the original 1.5 estimate):
+#   Phase 5 (LoRA fine-tune, 10 epochs):  ~5 hours
+#   Phase 6 (cache regen):                ~2 hours
+#   Phase 7 (docker build):               ~10-30 minutes
 #   ─────────────────────────────────────
-#   Total:                     ~6-7 hours
+#   Total:                                ~7-8 hours
+#
+# 10 epochs (vs the plan's original 20) is appropriate because the base
+# v2_finetune checkpoint is already converged on this distribution
+# (training-time loss is in the 0.02-0.04 range from step 1), and LoRA's
+# implicit low-rank regularization keeps adaptation efficient. Empirically
+# LoRA fine-tunes converge in <10 epochs for small-data adaptation like
+# this (644 new frames upweighted 20x into a 14k base).
 
 set -uo pipefail
 
@@ -74,7 +82,7 @@ fi
 # ─ Phase 5: LoRA fine-tune ─
 log ""
 log "════════════════════════════════════════════════════════════════"
-log "Phase 5 — LoRA fine-tune (~4h on GB10)"
+log "Phase 5 — LoRA fine-tune (10 epochs, ~5h on GB10 at 0.60 steps/s)"
 log "════════════════════════════════════════════════════════════════"
 P5_START=$(date +%s)
 
@@ -83,8 +91,8 @@ python3 -m src.train_realistic \
     --finetune \
     --lora --lora-rank 16 --lora-alpha 32 \
     --output-dir "$LORA_OUT" \
-    --epochs 20 --batch-size 16 --lr 3e-4 \
-    --cfg-dropout 0.10 --sample-every 3 --save-every 5 2>&1 | tee -a "$LOG"
+    --epochs 10 --batch-size 16 --lr 3e-4 \
+    --cfg-dropout 0.10 --sample-every 2 --save-every 3 2>&1 | tee -a "$LOG"
 
 P5_EXIT=${PIPESTATUS[0]}
 P5_END=$(date +%s)

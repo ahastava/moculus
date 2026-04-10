@@ -1250,10 +1250,20 @@ def train(
         ema = EMAModel(model, decay=0.999)
 
     # Training
+    import time as _time
+
+    # How often to print live per-step progress (in addition to per-epoch
+    # logging). Set to 0 to disable. The print is line-buffered via flush=True
+    # so `tail -f training.log` and tmux capture-pane both see it within ~1
+    # step rather than after the full batch buffer flushes.
+    log_every_steps = 50
+
     for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
         n_batches = 0
+        step_window_start = _time.time()
+        step_window_loss = 0.0
 
         for batch in loader:
             # Both RealPOCUSDataset and SyntheticMmodeDataset return
@@ -1312,8 +1322,26 @@ def train(
             scaler.update()
 
             ema.update(model)
-            epoch_loss += loss.item()
+            step_loss = loss.item()
+            epoch_loss += step_loss
+            step_window_loss += step_loss
             n_batches += 1
+
+            # Per-step live progress (every `log_every_steps` batches).
+            # Prints to stdout with flush so tmux + tail see it immediately.
+            if log_every_steps > 0 and n_batches % log_every_steps == 0:
+                window_dt = _time.time() - step_window_start
+                steps_per_sec = log_every_steps / max(window_dt, 1e-6)
+                window_avg_loss = step_window_loss / log_every_steps
+                print(
+                    f"  ep {epoch:3d} step {n_batches:5d} | "
+                    f"loss={window_avg_loss:.4f} | "
+                    f"{steps_per_sec:.2f} steps/s "
+                    f"({window_dt:.1f}s for last {log_every_steps})",
+                    flush=True,
+                )
+                step_window_start = _time.time()
+                step_window_loss = 0.0
 
         scheduler.step()
         avg_loss = epoch_loss / max(n_batches, 1)
