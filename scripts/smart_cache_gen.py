@@ -482,6 +482,20 @@ def main():
             "leave upper BLUE zones untouched."
         ),
     )
+    parser.add_argument(
+        "--diaphragm-model",
+        type=str,
+        default=None,
+        help=(
+            "Path to a zone-aware fine-tuned LoRA checkpoint produced by "
+            "Phase 5 (e.g. checkpoints/realistic_v2_diaphragm_lora/latest_lora.pt). "
+            "When provided, the realistic generator routes lower-zone frames "
+            "(LOWER_BLUE / PLAPS / Diaphragm) to this model. Upper zones "
+            "always use the base model regardless of this flag. If omitted, "
+            "the generator falls back to its auto-detection of "
+            "checkpoints/anatomy_bank_diaphragm.pt + the base trauma model."
+        ),
+    )
     args = parser.parse_args()
 
     n_frames = args.n_frames
@@ -591,6 +605,24 @@ def main():
         print(f"{'=' * 70}")
 
         gen = POCImageStackGenerator(scenario=scenario_key, stack_config=cfg)
+
+        # If a zone-aware fine-tuned model was passed via --diaphragm-model,
+        # replace the auto-loaded realistic generator with one that knows
+        # about it. We do this once per scenario so the model gets re-loaded
+        # if the user kills + restarts mid-run, but loading is cheap because
+        # the LoRA delta itself is only ~3 MB on top of the existing base.
+        if args.diaphragm_model and gen._realistic_gen is not None:
+            try:
+                from src.realistic_generator import RealisticLungUSGenerator
+                gen._realistic_gen = RealisticLungUSGenerator.from_pretrained(
+                    model_path=POCImageStackGenerator._DEFAULT_MODEL,
+                    trauma_model_path=POCImageStackGenerator._TRAUMA_MODEL,
+                    diaphragm_model_path=args.diaphragm_model,
+                )
+                print(f"  diaphragm model loaded from {args.diaphragm_model}")
+            except Exception as e:
+                print(f"  WARNING: failed to load diaphragm model {args.diaphragm_model}: {e}")
+                print(f"           falling back to auto-detected base model")
 
         # Override DDIM steps on the realistic generator
         if gen._realistic_gen is not None:
