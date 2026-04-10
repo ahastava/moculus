@@ -33,8 +33,13 @@ try:
         gui_angles_to_imu_pose,
         imu_pose_to_gui_angles,
     )
-except ImportError:
-    pass  # keras not installed — legacy modules unavailable
+except (ImportError, TypeError, AttributeError):
+    # Catch ImportError (keras/zea not installed) AND TypeError (which the
+    # current env raises from a typer/click version incompatibility cascading
+    # through huggingface_hub → zea). These legacy modules aren't required
+    # for the modern ControlNet/LoRA training pipeline, so silently degrade
+    # rather than blocking imports of the rest of the package.
+    pass
 from .clinical_frames import (
     ClinicalFrameGenerator,
     ClinicalTemporalStack,

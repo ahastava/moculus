@@ -191,6 +191,7 @@ class RealisticLungUSGenerator:
         trauma_model_path: Optional[str] = None,
         diaphragm_model_path: Optional[str] = None,
         anatomy_bank_path: Optional[str] = None,
+        diaphragm_bank_path: Optional[str] = None,
         device: Optional[str] = None,
         guidance_scale: float = 4.0,
         num_inference_steps: int = 50,
@@ -227,12 +228,12 @@ class RealisticLungUSGenerator:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Load anatomy bank if available
-        anatomy_bank = None
+        base_bank = None
         if anatomy_bank_path:
             bank_file = _ROOT / anatomy_bank_path
             if bank_file.exists():
                 from .anatomy_bank import LesionAnatomyBank
-                anatomy_bank = LesionAnatomyBank.load(str(bank_file))
+                base_bank = LesionAnatomyBank.load(str(bank_file))
                 logger.info(f"Loaded anatomy bank from {bank_file}")
             else:
                 logger.warning(f"No anatomy bank at {bank_file}")
@@ -241,8 +242,31 @@ class RealisticLungUSGenerator:
             default_bank = _ROOT / "checkpoints" / "anatomy_bank.pt"
             if default_bank.exists():
                 from .anatomy_bank import LesionAnatomyBank
-                anatomy_bank = LesionAnatomyBank.load(str(default_bank))
+                base_bank = LesionAnatomyBank.load(str(default_bank))
                 logger.info(f"Auto-loaded anatomy bank from {default_bank}")
+
+        # Optionally load the zone-aware diaphragm bank and merge with base.
+        # When the diaphragm bank exists, MergedAnatomyBank dispatches to
+        # it for zone_region > 0 and falls back to the base for upper zones.
+        diaphragm_bank = None
+        diaphragm_bank_file = (
+            _ROOT / diaphragm_bank_path
+            if diaphragm_bank_path
+            else _ROOT / "checkpoints" / "anatomy_bank_diaphragm.pt"
+        )
+        if diaphragm_bank_file.exists():
+            try:
+                from .anatomy_bank import DiaphragmAnatomyBank
+                diaphragm_bank = DiaphragmAnatomyBank.load(str(diaphragm_bank_file))
+                logger.info(f"Loaded diaphragm anatomy bank from {diaphragm_bank_file}")
+            except Exception as e:
+                logger.warning(f"Failed to load diaphragm bank at {diaphragm_bank_file}: {e}")
+
+        anatomy_bank = base_bank
+        if base_bank is not None and diaphragm_bank is not None:
+            from .anatomy_bank import MergedAnatomyBank
+            anatomy_bank = MergedAnatomyBank(base=base_bank, diaphragm=diaphragm_bank)
+            logger.info("MergedAnatomyBank active (base + diaphragm)")
 
         try:
             from .train_realistic import create_inference_scheduler
@@ -308,7 +332,7 @@ class RealisticLungUSGenerator:
         guide: np.ndarray,
         pathology_class: int,
         seed: Optional[int] = None,
-        zone_region: Optional[int] = None,  # noqa: ARG002 — Phase 4 will use this
+        zone_region: Optional[int] = None,
     ) -> np.ndarray:
         """
         Enhance a structural guide with real lesion textures from the
@@ -318,15 +342,28 @@ class RealisticLungUSGenerator:
         incorporate real tissue textures at anatomically plausible positions
         produce more realistic DDPM outputs than pure physics-based guides.
 
-        zone_region is accepted for forward-compatibility with the
-        DiaphragmAnatomyBank that Phase 4 will introduce. The current
-        LesionAnatomyBank ignores it (class-only sampling).
+        When `zone_region > 0` AND `self.anatomy_bank` is a
+        `MergedAnatomyBank` (i.e. the optional `anatomy_bank_diaphragm.pt`
+        was loaded), sampling dispatches to the zone-aware diaphragm
+        bank with a graceful fallback to the class-only base bank for
+        any (class, zone) pair that lacks data. When zone_region is
+        None or 0 OR the diaphragm bank is not loaded, behavior is
+        bit-identical to the legacy class-only sampling path.
         """
         if self.anatomy_bank is None:
             return guide
 
+        # Try the zone-aware path first. Both LesionAnatomyBank and
+        # MergedAnatomyBank accept zone_region kwargs (the base bank
+        # tolerates it for forward compat — see _bank_sample_kwargs).
+        sample_kwargs = (
+            {"zone_region": zone_region}
+            if hasattr(self.anatomy_bank, "diaphragm")  # MergedAnatomyBank
+            else {}
+        )
+
         texture = self.anatomy_bank.sample_lesion_texture(
-            pathology_class, seed=seed
+            pathology_class, seed=seed, **sample_kwargs
         )
         if texture is None:
             return guide
@@ -337,6 +374,7 @@ class RealisticLungUSGenerator:
             image_size=(h, w),
             pleural_row=self.guide_gen.pleural_row,
             seed=(seed + 1) if seed is not None else None,
+            **sample_kwargs,
         )
 
         ps = texture.shape[0]

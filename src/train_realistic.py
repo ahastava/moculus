@@ -75,9 +75,10 @@ class RealPOCUSDataset(Dataset):
     Loads real POCUS images with on-the-fly structural guide generation.
 
     Each sample returns:
-        image:   [1, H, W] float32 in [-1, 1]  (real ultrasound frame)
-        guide:   [1, H, W] float32 in [-1, 1]  (structural map from physics renderer)
-        label:   int (pathology class 0-9)
+        image:        [1, H, W] float32 in [-1, 1]  (real ultrasound frame)
+        guide:        [1, H, W] float32 in [-1, 1]  (structural map)
+        label:        int (pathology class 0-9 for B-mode, 11-20 for M-mode)
+        zone_region:  int (0-6, default 0 = UPPER_GENERIC for legacy rows)
 
     The structural guide is generated fresh each time from clinical_frames.py
     with a random seed. This means the guide won't pixel-align with the real
@@ -88,6 +89,19 @@ class RealPOCUSDataset(Dataset):
     When anatomy_bank is provided, guides are enhanced with real lesion textures
     (50% probability during training) to close the train/inference gap — the
     inference pipeline always uses anatomy bank enhancement.
+
+    The `zone_region` column was added in Phase 3 to support zone-aware
+    fine-tuning. Existing rows in metadata.csv without this column default
+    to 0 (UPPER_GENERIC), preserving legacy behavior for the ~14k existing
+    frames. Newly-labeled diaphragmatic frames get values 1-6 from the
+    ZoneRegion enum in clinical_frames.py.
+
+    The `zone_region_upweight` parameter is the multiplier applied to
+    sample weights for rows with zone_region > 0. With ~500-1000 new
+    diaphragm frames mixed into ~15k existing rows, an upweight of 20×
+    yields ~5-10% diaphragm content per batch — enough for the LoRA
+    fine-tune to learn the deltas without overwhelming the loss with
+    upper-zone gradients.
     """
 
     def __init__(
@@ -98,13 +112,18 @@ class RealPOCUSDataset(Dataset):
         augment: bool = True,
         anatomy_bank=None,
         anatomy_blend: float = 0.35,
+        zone_region_upweight: float = 20.0,
     ):
         self.data_dir = Path(data_dir)
         self.image_size = image_size
         self.augment = augment and (split == "train")
         self.split = split
+        self.zone_region_upweight = zone_region_upweight
 
-        # Load metadata
+        # Load metadata. The `zone_region` column is optional — pre-Phase-3
+        # CSVs don't have it, so we default to 0 (UPPER_GENERIC) for any
+        # row that's missing the column. This preserves legacy behavior
+        # for the ~14k existing frames without forcing a CSV migration.
         import csv
         self.samples = []
         meta_path = self.data_dir / "metadata.csv"
@@ -115,9 +134,15 @@ class RealPOCUSDataset(Dataset):
         with open(meta_path) as f:
             for row in csv.DictReader(f):
                 if row["split"] == split:
+                    zone_region_str = row.get("zone_region", "0")
+                    try:
+                        zone_region = int(zone_region_str) if zone_region_str else 0
+                    except (TypeError, ValueError):
+                        zone_region = 0
                     self.samples.append({
                         "path": self.data_dir / "images" / row["filename"],
                         "label": int(row["pathology_class"]),
+                        "zone_region": zone_region,
                     })
 
         if not self.samples:
@@ -130,16 +155,27 @@ class RealPOCUSDataset(Dataset):
         self.anatomy_bank = anatomy_bank
         self.anatomy_blend = anatomy_blend
 
-        # Class weights for balanced sampling
+        # Class weights for balanced sampling, with extra upweight for
+        # zone_region > 0 rows so they get fair representation in each
+        # batch despite being a tiny minority of the total dataset.
         counts = {}
+        zone_counts = {}
         for s in self.samples:
             counts[s["label"]] = counts.get(s["label"], 0) + 1
+            zone_counts[s["zone_region"]] = zone_counts.get(s["zone_region"], 0) + 1
         max_count = max(counts.values())
-        self.sample_weights = [max_count / counts[s["label"]] for s in self.samples]
+        self.sample_weights = []
+        for s in self.samples:
+            base_weight = max_count / counts[s["label"]]
+            if s["zone_region"] > 0:
+                base_weight *= self.zone_region_upweight
+            self.sample_weights.append(base_weight)
 
         logger.info(
             f"RealPOCUSDataset({split}): {len(self.samples)} images, "
-            f"classes: {dict(sorted(counts.items()))}"
+            f"classes: {dict(sorted(counts.items()))}, "
+            f"zone_regions: {dict(sorted(zone_counts.items()))}, "
+            f"zone_upweight: {self.zone_region_upweight}x for zone_region > 0"
         )
 
     @property
@@ -157,13 +193,18 @@ class RealPOCUSDataset(Dataset):
     def __getitem__(self, idx):
         sample = self.samples[idx]
         label = sample["label"]
+        zone_region = sample.get("zone_region", 0)
 
         # Load real image
         img = Image.open(sample["path"]).convert("L")
         img = img.resize((self.image_size, self.image_size), Image.LANCZOS)
         image = np.asarray(img, dtype=np.float32) / 255.0
 
-        # Generate structural guide
+        # Generate structural guide. For zone_region > 0 (lower BLUE / PLAPS
+        # / Diaphragm) the guide will include the diaphragmatic anatomy
+        # overlay from clinical_frames.py. For zone_region in {0, None}
+        # the legacy code path runs and the guide is bit-identical to the
+        # pre-Phase-1 output.
         from .clinical_frames import ClinicalPathology
         if label >= MMODE_CLASS_OFFSET:
             # M-mode: the image IS the guide (both are the cached M-mode)
@@ -171,18 +212,32 @@ class RealPOCUSDataset(Dataset):
         else:
             # B-mode: generate a structural guide from the physics renderer
             try:
-                guide = self.guide_gen.generate(ClinicalPathology(label))
+                guide = self.guide_gen.generate(
+                    ClinicalPathology(label),
+                    zone_region=zone_region if zone_region > 0 else None,
+                )
             except (ValueError, KeyError):
                 guide = np.zeros_like(image)
 
-        # Anatomy bank enhancement (50% chance during training)
+        # Anatomy bank enhancement (50% chance during training).
+        # Pass zone_region through so zone-aware banks (MergedAnatomyBank
+        # / DiaphragmAnatomyBank) can sample zone-specific textures.
+        # The base LesionAnatomyBank doesn't accept the kwarg, so we
+        # detect a MergedAnatomyBank by attribute presence and only pass
+        # the kwarg in that case.
         if self.anatomy_bank is not None and self.augment and np.random.random() < 0.5:
             try:
-                texture = self.anatomy_bank.sample_lesion_texture(label)
+                bank_kwargs = (
+                    {"zone_region": zone_region}
+                    if hasattr(self.anatomy_bank, "diaphragm")  # MergedAnatomyBank
+                    else {}
+                )
+                texture = self.anatomy_bank.sample_lesion_texture(label, **bank_kwargs)
                 if texture is not None:
                     row, col = self.anatomy_bank.sample_lesion_position(
                         label, image_size=self.image_size,
                         pleural_row=int(self.image_size * 0.17),
+                        **bank_kwargs,
                     )
                     ph, pw = texture.shape[:2]
                     r0 = max(0, row - ph // 2)
@@ -235,7 +290,7 @@ class RealPOCUSDataset(Dataset):
         image = torch.from_numpy(image).unsqueeze(0)
         guide = torch.from_numpy(guide).unsqueeze(0)
 
-        return image, guide, label
+        return image, guide, label, zone_region
 
 
 # ── M-mode Dataset ───────────────────────────────────────────────────────────
@@ -367,7 +422,11 @@ class SyntheticMmodeDataset(Dataset):
         # Offset label for M-mode class space
         label = cls + MMODE_CLASS_OFFSET
 
-        return image, guide, label
+        # M-mode is a per-scanline temporal trace, not a BLUE protocol view,
+        # so it always carries zone_region=0 (UPPER_GENERIC). Returning a
+        # 4-tuple keeps M-mode samples stackable in the same DataLoader as
+        # the zone-aware RealPOCUSDataset.
+        return image, guide, label, 0
 
 
 # ── EMA (Exponential Moving Average) ────────────────────────────────────────
@@ -1060,13 +1119,31 @@ def train(
     logger.info(f"Data:   {data_dir}")
     logger.info(f"Output: {output_path}")
 
-    # Load anatomy bank for guide enhancement (closes train/inference gap)
+    # Load anatomy bank for guide enhancement (closes train/inference gap).
+    # If both the base LesionAnatomyBank and the optional zone-aware
+    # DiaphragmAnatomyBank are present, wrap them in MergedAnatomyBank
+    # so the dataset's per-sample anatomy enhancement can dispatch on
+    # zone_region. The diaphragm bank is a no-op for upper-zone samples.
     anatomy_bank = None
-    bank_path = _ROOT / "checkpoints" / "anatomy_bank.pt"
-    if bank_path.exists():
+    base_bank_path = _ROOT / "checkpoints" / "anatomy_bank.pt"
+    if base_bank_path.exists():
         from .anatomy_bank import LesionAnatomyBank
-        anatomy_bank = LesionAnatomyBank.load(str(bank_path))
-        logger.info(f"Loaded anatomy bank from {bank_path}")
+        base_bank = LesionAnatomyBank.load(str(base_bank_path))
+        logger.info(f"Loaded anatomy bank from {base_bank_path}")
+        anatomy_bank = base_bank
+
+        diaphragm_bank_path = _ROOT / "checkpoints" / "anatomy_bank_diaphragm.pt"
+        if diaphragm_bank_path.exists():
+            try:
+                from .anatomy_bank import DiaphragmAnatomyBank, MergedAnatomyBank
+                diaphragm_bank = DiaphragmAnatomyBank.load(str(diaphragm_bank_path))
+                anatomy_bank = MergedAnatomyBank(base=base_bank, diaphragm=diaphragm_bank)
+                logger.info(
+                    f"Loaded zone-aware diaphragm bank from {diaphragm_bank_path} "
+                    f"(merged with base for training)"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to load diaphragm bank: {e}; using base only")
 
     # Dataset — loads both B-mode (classes 0-9) and pre-cached M-mode (classes 11-20)
     # M-mode images are already saved to disk with class labels 11-20 in metadata.csv
@@ -1178,15 +1255,31 @@ def train(
         epoch_loss = 0.0
         n_batches = 0
 
-        for images, guides, labels in loader:
-            images = images.to(device)     # [B, 1, H, W]
-            guides = guides.to(device)     # [B, 1, H, W]
-            labels = labels.to(device)     # [B]
+        for batch in loader:
+            # Both RealPOCUSDataset and SyntheticMmodeDataset return
+            # 4-tuples after Phase 3a. zone_labels are integer tensors
+            # 0..6 (UPPER_GENERIC..DIAPHRAGM_R), with the vast majority
+            # of legacy rows defaulting to 0.
+            images, guides, labels, zone_labels = batch
+            images = images.to(device)         # [B, 1, H, W]
+            guides = guides.to(device)         # [B, 1, H, W]
+            labels = labels.to(device)         # [B]
+            zone_labels = zone_labels.to(device)  # [B]
 
             # ── Classifier-free guidance dropout ──
             # Drop class label → null class
             drop_class = torch.rand(labels.shape[0], device=device) < cfg_dropout
             labels = torch.where(drop_class, torch.full_like(labels, NULL_CLASS), labels)
+
+            # Drop zone label → null zone (CFG over zone is independent
+            # of CFG over class so the model can guide on each axis at
+            # inference time).
+            drop_zone = torch.rand(zone_labels.shape[0], device=device) < cfg_dropout
+            zone_labels = torch.where(
+                drop_zone,
+                torch.full_like(zone_labels, ZONE_REGION_NULL),
+                zone_labels,
+            )
 
             # Drop structural guide → zeros
             drop_guide = torch.rand(labels.shape[0], 1, 1, 1, device=device) < cfg_dropout
@@ -1202,7 +1295,12 @@ def train(
 
             # ── Predict noise (ControlNet: separate noisy image + guide) ──
             with torch.amp.autocast("cuda", enabled=(device == "cuda")):
-                noise_pred = model(noisy_images, timesteps, class_labels=labels, guide=guides).sample
+                noise_pred = model(
+                    noisy_images, timesteps,
+                    class_labels=labels,
+                    guide=guides,
+                    zone_labels=zone_labels,
+                ).sample
                 loss = F.mse_loss(noise_pred, noise)
 
             # ── Backward ──
@@ -1225,10 +1323,12 @@ def train(
         n_val = 0
         model.eval()
         with torch.no_grad():
-            for images, guides, labels in val_loader:
+            for batch in val_loader:
+                images, guides, labels, zone_labels = batch
                 images = images.to(device)
                 guides = guides.to(device)
                 labels = labels.to(device)
+                zone_labels = zone_labels.to(device)
 
                 noise = torch.randn_like(images)
                 timesteps = torch.randint(
@@ -1238,7 +1338,12 @@ def train(
                 noisy_images = noise_scheduler.add_noise(images, noise, timesteps)
 
                 with torch.amp.autocast("cuda", enabled=(device == "cuda")):
-                    noise_pred = model(noisy_images, timesteps, class_labels=labels, guide=guides).sample
+                    noise_pred = model(
+                        noisy_images, timesteps,
+                        class_labels=labels,
+                        guide=guides,
+                        zone_labels=zone_labels,
+                    ).sample
                     val_loss += F.mse_loss(noise_pred, noise).item()
                 n_val += 1
 
