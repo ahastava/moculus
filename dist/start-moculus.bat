@@ -13,7 +13,7 @@ echo.
 
 :: Check Docker is installed
 where docker >nul 2>&1
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo  [!] Docker is not installed.
     echo      Download it from: https://www.docker.com/products/docker-desktop
     echo      Install it, restart your computer, then run this script again.
@@ -24,30 +24,23 @@ if %errorlevel% neq 0 (
 
 :: Check Docker daemon is running
 docker info >nul 2>&1
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo  [!] Docker is not running. Starting Docker Desktop...
     start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    echo      Waiting for Docker to start (this may take a minute)...
-    :wait_docker
-    timeout /t 3 /nobreak >nul
-    docker info >nul 2>&1
-    if %errorlevel% neq 0 goto wait_docker
+    echo      Waiting for Docker to start. This may take a minute...
+    call :wait_for_docker
     echo      Docker is ready.
     echo.
 )
 
-:: Stop old container if running
-docker ps -q -f name=%CONTAINER% >nul 2>&1
-for /f %%i in ('docker ps -q -f name^=%CONTAINER%') do (
-    echo  Stopping previous session...
-    docker stop %CONTAINER% >nul 2>&1
-    docker rm %CONTAINER% >nul 2>&1
-)
+:: Stop old container if running (errors suppressed if none exists)
+docker stop %CONTAINER% >nul 2>&1
+docker rm %CONTAINER% >nul 2>&1
 
 :: Pull latest image
-echo  Downloading latest MoCoLUS (first time may take a few minutes)...
+echo  Downloading latest MoCoLUS ^(first time may take a few minutes^)...
 docker pull %IMAGE%
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo.
     echo  [!] Failed to download. Check your internet connection.
     pause
@@ -64,10 +57,7 @@ docker run -d --name %CONTAINER% -p 8000:8000 %IMAGE% >nul 2>&1
 
 :: Wait for server to be ready
 echo  Waiting for server to start...
-:wait_server
-timeout /t 2 /nobreak >nul
-curl -s http://localhost:8000/api/scenarios >nul 2>&1
-if %errorlevel% neq 0 goto wait_server
+call :wait_for_server
 
 :: Open browser
 echo.
@@ -90,3 +80,19 @@ echo  Stopping MoCoLUS...
 docker stop %CONTAINER% >nul 2>&1
 docker rm %CONTAINER% >nul 2>&1
 echo  Done.
+exit /b 0
+
+:: ----- Subroutines -----
+:: Labels must live OUTSIDE any if/for blocks to work reliably.
+
+:wait_for_docker
+timeout /t 3 /nobreak >nul
+docker info >nul 2>&1
+if errorlevel 1 goto :wait_for_docker
+goto :eof
+
+:wait_for_server
+timeout /t 2 /nobreak >nul
+curl -s http://localhost:8000/api/scenarios >nul 2>&1
+if errorlevel 1 goto :wait_for_server
+goto :eof
