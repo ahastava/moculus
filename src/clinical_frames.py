@@ -49,6 +49,47 @@ CLINICAL_PATHOLOGY_NAMES = {int(p): p.name.lower() for p in ClinicalPathology}
 
 
 # ---------------------------------------------------------------------------
+# BLUE Protocol Zone Regions
+# ---------------------------------------------------------------------------
+# Maps the 8 LungZones (defined in poc_image_stack.py) into 7 anatomical
+# regions used for zone-aware structural guide rendering. Upper BLUE zones
+# share a single "UPPER_GENERIC" slot since their anatomy is identical;
+# lower zones are split L/R because diaphragm side determines liver vs
+# spleen parenchyma below the diaphragmatic line.
+#
+# The integer values are stable — they're used as indices into the
+# nn.Embedding(NUM_ZONE_REGIONS) defined in train_realistic.py and as
+# the on-disk metadata column `zone_region` in real_pocus/metadata.csv.
+# DO NOT renumber these — it would break checkpoint compatibility.
+
+class ZoneRegion(IntEnum):
+    """Anatomical region used for zone-aware frame generation."""
+    UPPER_GENERIC = 0    # UPPER_BLUE_L/R + all M-mode + unlabeled (default)
+    LOWER_BLUE_L = 1     # Left lower BLUE — faint costophrenic recess hint
+    LOWER_BLUE_R = 2     # Right lower BLUE
+    PLAPS_L = 3          # Left PLAPS — partial diaphragm + spleen below
+    PLAPS_R = 4          # Right PLAPS — partial diaphragm + liver below
+    DIAPHRAGM_L = 5      # Left diaphragm — dominant diaphragm + spleen
+    DIAPHRAGM_R = 6      # Right diaphragm — dominant diaphragm + liver
+    NULL = 7             # CFG dropout slot
+    GAP = 8              # Reserved (NUM_ZONE_REGIONS = 9 for embedding alignment)
+
+
+NUM_ZONE_REGIONS = 9
+
+# Sets used by the dispatch logic in `generate()` below.
+LOWER_ZONE_REGIONS = frozenset({1, 2, 3, 4, 5, 6})
+DIAPHRAGM_ZONE_REGIONS = frozenset({5, 6})
+PLAPS_ZONE_REGIONS = frozenset({3, 4})
+LOWER_BLUE_ZONE_REGIONS = frozenset({1, 2})
+
+# Side-of-body lookup. Even-indexed lower zones (2, 4, 6) are RIGHT (liver);
+# odd-indexed (1, 3, 5) are LEFT (spleen). Matches LungZone L/R convention.
+def _zone_side(zone_region: int) -> str:
+    return "R" if zone_region in (2, 4, 6) else "L"
+
+
+# ---------------------------------------------------------------------------
 # Tissue Layer Model
 # ---------------------------------------------------------------------------
 
@@ -562,6 +603,321 @@ class ClinicalFrameGenerator:
         return image
 
     # ------------------------------------------------------------------
+    # Diaphragmatic anatomy (lower BLUE zones: PLAPS, Diaphragm)
+    # ------------------------------------------------------------------
+    # These primitives render the curved hyperechoic diaphragm and the
+    # subdiaphragmatic parenchyma (liver on the right, spleen on the left)
+    # plus optional vessels and the spine sign visible through pleural
+    # effusion. They're composed by `_composite_diaphragm_overlay` below
+    # and only run when zone_region > 0 in `generate()`.
+
+    def _draw_diaphragm(
+        self,
+        image: np.ndarray,
+        rng: np.random.Generator,
+        top_row: int,
+        side: str = "L",
+        curvature_px: int = 12,
+        thickness_px: int = 4,
+        intensity: float = 0.92,
+    ) -> np.ndarray:
+        """
+        Draw the diaphragm: a bright, curved hyperechoic line.
+
+        The diaphragm is one of the brightest reflectors in the body
+        (air-tissue interface above + dense muscle below). On B-mode it
+        appears as a thick curved line that arches upward toward the
+        probe footprint.
+
+        Args:
+            top_row: Row index of the diaphragm apex (highest point in image).
+            side: "L" or "R" — affects curvature asymmetry.
+            curvature_px: How many pixels lower the lateral edges sit
+                relative to the apex.
+            thickness_px: Diaphragm line thickness.
+            intensity: Peak brightness.
+        """
+        # Apex is offset toward the side that the probe is angled from:
+        #  - "L" (spleen view): apex is right-of-center (spleen sits lower-medially)
+        #  - "R" (liver view):  apex is left-of-center  (liver sits lower-medially)
+        if side == "R":
+            apex_col = int(self.W * 0.40)
+        else:
+            apex_col = int(self.W * 0.60)
+
+        # Parabolic arc: row = top_row + curvature_px * ((col - apex)/halfW)^2
+        cols = np.arange(self.W)
+        norm = (cols - apex_col) / max(1, self.W * 0.55)
+        diaphragm_rows = top_row + (curvature_px * norm * norm).astype(int)
+
+        # Add slight noise to break up the perfectly smooth arc
+        diaphragm_rows = diaphragm_rows + rng.integers(-1, 2, size=self.W)
+        diaphragm_rows = np.clip(diaphragm_rows, 0, self.H - thickness_px - 1)
+
+        half = thickness_px // 2
+        for col in range(self.W):
+            r0 = max(0, int(diaphragm_rows[col]) - half)
+            r1 = min(self.H, int(diaphragm_rows[col]) + half + 1)
+            # Slight per-column intensity variation for organic look
+            local_intensity = intensity * rng.uniform(0.85, 1.0)
+            image[r0:r1, col] = np.maximum(image[r0:r1, col], local_intensity)
+
+        return image
+
+    def _draw_liver_parenchyma(
+        self,
+        image: np.ndarray,
+        rng: np.random.Generator,
+        top_row: int,
+        bottom_row: Optional[int] = None,
+    ) -> np.ndarray:
+        """
+        Render homogeneous liver parenchyma below the diaphragm.
+
+        Liver tissue is mid-grey with fine speckle and a coherent
+        scatterer pattern. Slightly more echogenic than spleen.
+        Acoustic properties: echogenicity ~0.40, scatter density ~0.65.
+        """
+        if bottom_row is None:
+            bottom_row = self.H
+        if top_row >= bottom_row:
+            return image
+
+        n_rows = bottom_row - top_row
+        # Base mid-grey echogenicity with mild gradient (brighter superficial)
+        base = np.linspace(0.42, 0.32, n_rows).reshape(-1, 1)
+        liver = np.tile(base, (1, self.W))
+
+        # Coherent speckle pattern
+        n_scatterers = int(0.65 * n_rows * self.W * 0.15)
+        if n_scatterers > 0:
+            scatter = np.zeros((n_rows, self.W), dtype=np.float64)
+            rs = rng.integers(0, n_rows, n_scatterers)
+            cs = rng.integers(0, self.W, n_scatterers)
+            amps = rng.rayleigh(0.09, n_scatterers)
+            np.add.at(scatter, (rs, cs), amps)
+            scatter = gaussian_filter(scatter, sigma=[1.6, 2.2])
+            liver += scatter
+
+        image[top_row:bottom_row, :] = np.clip(liver, 0.0, 1.0)
+        return image
+
+    def _draw_spleen_parenchyma(
+        self,
+        image: np.ndarray,
+        rng: np.random.Generator,
+        top_row: int,
+        bottom_row: Optional[int] = None,
+    ) -> np.ndarray:
+        """
+        Render spleen parenchyma below the left hemidiaphragm.
+
+        Spleen is slightly more echogenic than liver, more uniform,
+        with finer texture. Echogenicity ~0.45, scatter density ~0.55.
+        """
+        if bottom_row is None:
+            bottom_row = self.H
+        if top_row >= bottom_row:
+            return image
+
+        n_rows = bottom_row - top_row
+        base = np.linspace(0.46, 0.36, n_rows).reshape(-1, 1)
+        spleen = np.tile(base, (1, self.W))
+
+        # Finer scatterer pattern (less variance than liver)
+        n_scatterers = int(0.55 * n_rows * self.W * 0.15)
+        if n_scatterers > 0:
+            scatter = np.zeros((n_rows, self.W), dtype=np.float64)
+            rs = rng.integers(0, n_rows, n_scatterers)
+            cs = rng.integers(0, self.W, n_scatterers)
+            amps = rng.rayleigh(0.07, n_scatterers)
+            np.add.at(scatter, (rs, cs), amps)
+            scatter = gaussian_filter(scatter, sigma=[1.4, 1.8])
+            spleen += scatter
+
+        image[top_row:bottom_row, :] = np.clip(spleen, 0.0, 1.0)
+        return image
+
+    def _draw_subdiaphragmatic_vessels(
+        self,
+        image: np.ndarray,
+        rng: np.random.Generator,
+        region_top: int,
+        region_bot: int,
+        n_vessels: int = 2,
+    ) -> np.ndarray:
+        """
+        Draw hypoechoic vessels (hepatic/splenic veins) inside the
+        subdiaphragmatic parenchyma. These appear as dark branching
+        tubes ~3-6 mm wide (6-12 px at 0.31 mm/px lateral resolution).
+        """
+        if region_top >= region_bot - 4:
+            return image
+
+        for _ in range(n_vessels):
+            # Vessel originates near the bottom of the image (toward IVC/SV)
+            start_col = int(rng.integers(self.W // 5, 4 * self.W // 5))
+            start_row = int(rng.integers(region_bot - 8, region_bot - 2))
+
+            # Curves toward the diaphragm with random lateral drift
+            length = int(rng.integers(15, 35))
+            width = int(rng.integers(4, 8))
+            drift = rng.normal(0, 0.4)
+
+            for step in range(length):
+                row = start_row - step
+                col = int(start_col + step * drift)
+                if row < region_top or row >= self.H or col < 0 or col >= self.W:
+                    break
+                c0 = max(0, col - width // 2)
+                c1 = min(self.W, col + width // 2 + 1)
+                # Hypoechoic: darken to near-zero with slight wall echo
+                image[row, c0:c1] *= 0.15
+                if c0 > 0:
+                    image[row, c0 - 1] = max(image[row, c0 - 1], 0.55)
+                if c1 < self.W:
+                    image[row, c1] = max(image[row, c1], 0.55)
+
+        return image
+
+    def _draw_spine_sign(
+        self,
+        image: np.ndarray,
+        rng: np.random.Generator,
+        depth_start_row: int,
+    ) -> np.ndarray:
+        """
+        Draw the "spine sign": vertebral bodies visible through
+        anechoic pleural effusion as bright vertical bands at the
+        posterior aspect of the image.
+
+        Only meaningful when overlaid through fluid (effusion).
+        Pre-effusion lung air would block this signal entirely.
+        """
+        if depth_start_row >= self.H - 4:
+            return image
+
+        # Two vertebral body shadows at lateral 30% and 70%
+        for col_frac in (0.30, 0.70):
+            col = int(self.W * col_frac)
+            half_w = max(2, self.W // 60)
+            c0 = max(0, col - half_w)
+            c1 = min(self.W, col + half_w + 1)
+
+            # Bright vertebral body cortex (curved highlight)
+            for row in range(depth_start_row, self.H):
+                jitter = int(rng.integers(-1, 2))
+                cc0 = max(0, c0 + jitter)
+                cc1 = min(self.W, c1 + jitter)
+                local_intensity = 0.65 + 0.10 * rng.random()
+                image[row, cc0:cc1] = np.maximum(image[row, cc0:cc1], local_intensity)
+
+        return image
+
+    def _composite_diaphragm_overlay(
+        self,
+        base_image: np.ndarray,
+        rng: np.random.Generator,
+        zone_region: int,
+        pathology: "ClinicalPathology",
+    ) -> np.ndarray:
+        """
+        Compose the diaphragmatic anatomy on top of an existing
+        log-compressed pathology frame for lower BLUE zones.
+
+        The strategy is intentionally non-destructive to upper-zone
+        rendering: we run the existing pathology generator unchanged,
+        then blend a freshly-rendered diaphragmatic overlay into the
+        bottom region of the image using a vertical alpha mask.
+
+        Region depths (fractions of image height):
+            LOWER_BLUE_L/R: bottom 10%   (faint costophrenic recess hint)
+            PLAPS_L/R:      bottom 50%   (partial diaphragm + organ)
+            DIAPHRAGM_L/R:  bottom 70%   (dominant diaphragm + organ)
+
+        Pneumothorax (class 1) is a special case: trapped air blocks
+        all visualization below the pleural line, so the overlay is
+        skipped and the bright A-line pattern from the base is preserved.
+        """
+        # Pneumothorax: air blocks subdiaphragmatic visualization entirely.
+        if int(pathology) == int(ClinicalPathology.PNEUMOTHORAX):
+            return base_image
+
+        side = _zone_side(zone_region)
+
+        if zone_region in DIAPHRAGM_ZONE_REGIONS:
+            overlay_start_frac = 0.30
+            diaphragm_top_frac = 0.35
+            blend_strength = 0.85
+        elif zone_region in PLAPS_ZONE_REGIONS:
+            overlay_start_frac = 0.50
+            diaphragm_top_frac = 0.62
+            blend_strength = 0.70
+        elif zone_region in LOWER_BLUE_ZONE_REGIONS:
+            # Just a faint costophrenic recess hint at the very bottom
+            overlay_start_frac = 0.88
+            diaphragm_top_frac = 0.92
+            blend_strength = 0.35
+        else:
+            return base_image
+
+        overlay_start_row = int(self.H * overlay_start_frac)
+        diaphragm_top_row = int(self.H * diaphragm_top_frac)
+
+        # Build the diaphragmatic anatomy on a fresh canvas in [0, 1]
+        overlay = np.full((self.H, self.W), 0.30, dtype=np.float64)
+
+        # Subdiaphragmatic parenchyma fills the region below the diaphragm
+        organ_top = diaphragm_top_row + 4
+        if side == "R":
+            self._draw_liver_parenchyma(overlay, rng, organ_top)
+        else:
+            self._draw_spleen_parenchyma(overlay, rng, organ_top)
+
+        # Vessels inside the parenchyma
+        self._draw_subdiaphragmatic_vessels(
+            overlay, rng,
+            region_top=organ_top + 4,
+            region_bot=self.H - 2,
+            n_vessels=int(rng.integers(1, 4)),
+        )
+
+        # Spine sign only meaningful when fluid is present (effusion)
+        if int(pathology) == int(ClinicalPathology.PLEURAL_EFFUSION):
+            self._draw_spine_sign(overlay, rng, depth_start_row=organ_top + 6)
+
+        # Draw the diaphragm line LAST so it sits on top of the parenchyma
+        self._draw_diaphragm(
+            overlay, rng,
+            top_row=diaphragm_top_row,
+            side=side,
+            curvature_px=int(rng.integers(8, 16)),
+            thickness_px=int(rng.integers(4, 7)),
+            intensity=0.95,
+        )
+
+        # Light depth-dependent blur to match the base image's PSF feel
+        overlay = gaussian_filter(overlay, sigma=[0.6, 0.9])
+        overlay = np.clip(overlay, 0.0, 1.0).astype(np.float32)
+
+        # Vertical alpha mask: 0 above overlay_start_row, smooth ramp,
+        # then `blend_strength` for the rest of the image
+        alpha = np.zeros(self.H, dtype=np.float32)
+        ramp_len = max(4, int(self.H * 0.05))
+        for row in range(self.H):
+            if row < overlay_start_row:
+                alpha[row] = 0.0
+            elif row < overlay_start_row + ramp_len:
+                t = (row - overlay_start_row) / ramp_len
+                alpha[row] = blend_strength * t
+            else:
+                alpha[row] = blend_strength
+        alpha_2d = alpha.reshape(-1, 1)
+
+        composite = base_image * (1.0 - alpha_2d) + overlay * alpha_2d
+        return composite.astype(np.float32)
+
+    # ------------------------------------------------------------------
     # Noise & post-processing
     # ------------------------------------------------------------------
 
@@ -869,6 +1225,7 @@ class ClinicalFrameGenerator:
         self,
         pathology: ClinicalPathology,
         seed: Optional[int] = None,
+        zone_region: Optional[int] = None,
     ) -> np.ndarray:
         """
         Generate a single clinically accurate B-mode frame.
@@ -876,6 +1233,12 @@ class ClinicalFrameGenerator:
         Args:
             pathology: Which clinical pathology to render.
             seed: Random seed for reproducibility.
+            zone_region: Optional ZoneRegion integer (0-6). When omitted
+                or set to UPPER_GENERIC (0), the output is bit-identical
+                to the legacy class-only behavior. When set to a lower
+                zone (1-6), the diaphragmatic anatomy overlay from
+                `_composite_diaphragm_overlay` is applied on top of the
+                rendered pathology.
 
         Returns:
             np.ndarray [H, W] float32 in [0, 1].
@@ -895,7 +1258,23 @@ class ClinicalFrameGenerator:
             ClinicalPathology.INTERSTITIAL_SYNDROME: self.generate_interstitial_syndrome,
         }
 
-        return generators[pathology](rng)
+        base_frame = generators[pathology](rng)
+
+        # Backwards compatibility: zone_region in {None, 0} → return
+        # the legacy frame unchanged so upper-zone outputs remain
+        # bit-identical to the pre-Phase-0 pipeline.
+        if zone_region is None or zone_region == 0 or zone_region not in LOWER_ZONE_REGIONS:
+            return base_frame
+
+        # Lower zones: composite the diaphragmatic anatomy overlay using
+        # an independent RNG seeded from the same source so the upper
+        # portion of the frame is unaffected.
+        overlay_rng = np.random.default_rng(
+            None if seed is None else seed + 7919  # arbitrary prime offset
+        )
+        return self._composite_diaphragm_overlay(
+            base_frame, overlay_rng, zone_region, pathology
+        )
 
     def generate_all(
         self, seed: int = 42
