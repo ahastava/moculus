@@ -198,6 +198,13 @@ class ProbeOverlayRenderer {
     this.probeNy = 0.25;
     this.probeVisible = false; // shown after first click/zone select
 
+    // Beam-target: where the angled scan plane projects onto the chest surface.
+    // Equals (probeNx, probeNy) when the probe is held perpendicular; offset by
+    // tan(tilt) * scan_depth when pitched/rolled. Drives which zone(s) the
+    // server-side Gaussian blender weights heaviest.
+    this.beamTargetNx = this.probeNx;
+    this.beamTargetNy = this.probeNy;
+
     this.isDragging = false;
     this.dragMode = null; // 'move' or 'rotate'
     this.dragStartX = 0;
@@ -247,10 +254,18 @@ class ProbeOverlayRenderer {
     this._dirty = true;
   }
 
+  setBeamTarget(nx, ny) {
+    this.beamTargetNx = nx;
+    this.beamTargetNy = ny;
+    this._dirty = true;
+  }
+
   snapToZone(zoneKey) {
     if (this.zones[zoneKey]) {
       this.probeNx = this.zones[zoneKey].nx;
       this.probeNy = this.zones[zoneKey].ny;
+      this.beamTargetNx = this.probeNx;
+      this.beamTargetNy = this.probeNy;
       this.probeVisible = true;
       this.yaw = 0; this.pitch = 0; this.roll = 0;
       this._updateAngleDisplay();
@@ -311,6 +326,32 @@ class ProbeOverlayRenderer {
     if (this.probeVisible) {
       const px = this._zx(this.probeNx, w);
       const py = this._zy(this.probeNy, h);
+      const bx = this._zx(this.beamTargetNx, w);
+      const by = this._zy(this.beamTargetNy, h);
+
+      // Tether: physical probe → beam target (shows how tilt projects the beam)
+      const tiltDist = Math.hypot(bx - px, by - py);
+      if (tiltDist > 1.5) {
+        ctx.strokeStyle = "rgba(120, 200, 140, 0.5)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Beam target (green) — the effective scanning point given tilt
+      ctx.strokeStyle = "rgba(120, 200, 140, 0.75)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(bx, by, 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(120, 200, 140, 0.35)";
+      ctx.fill();
+
+      // Physical probe (orange crosshair)
       ctx.strokeStyle = "rgba(255, 128, 48, 0.6)";
       ctx.lineWidth = 1.5;
       const cs = 8;
@@ -1119,16 +1160,20 @@ class BLEProbeManager {
    *   2. Nordic UART fallback (development/generic probes)
    *
    * Data format from BNO085BLE firmware:
-   *   "counter,seconds,loops,transfers,calStatus,YPR=yaw,pitch,roll,Q=qr,qi,qj,qk"
+   *   "counter,seconds,loops,transfers,calStatus,YPR=yaw,pitch,roll,Q=qr,qi,qj,qk[,LA=ax,ay,az]"
    *
-   * The onIMU callback receives (yaw, pitch, roll) in degrees.
-   * The onPosition callback receives (nx, ny) normalized 0-1 from pressure mat.
+   * Translation (nx, ny) source priority:
+   *   1. Pressure mat — absolute, drift-free. Wins whenever a mat sample arrived
+   *      within MAT_TIMEOUT_MS.
+   *   2. IMU linear acceleration — body-frame accel rotated to world frame using
+   *      current yaw, double-integrated to position with ZUPT and velocity damping
+   *      to bound the inevitable drift. Used only when the mat is silent.
    */
   constructor() {
     this.device = null;
     this.connected = false;
     this.onIMU = null;
-    this.onPosition = null;  // callback for pressure mat position (nx, ny)
+    this.onPosition = null;  // (nx, ny, confidence, source) — source ∈ {"mat","imu"}
     this.onStatus = null;
     this.yawOffset = 0;
     this._lastRawYaw = 0;
@@ -1141,10 +1186,60 @@ class BLEProbeManager {
     this.UART_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     this.UART_CHAR_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
 
-    // Pressure mat grid config (16x16 Velostat via CD74HC4067 mux)
-    // Maps grid (row, col) → normalized chest position (nx, ny)
+    // Pressure mat grid (16x16 Velostat via CD74HC4067 mux)
     this.GRID_ROWS = 16;
     this.GRID_COLS = 16;
+
+    // Translation state (used in IMU-fallback mode)
+    this.posNx = 0.5;
+    this.posNy = 0.5;
+    this.velX = 0;            // m/s, world-frame (patient coronal plane)
+    this.velY = 0;
+    this._lastAccelTs = null;
+    this._stillSamples = 0;
+    this._lastAccelMag = 0;
+    this._sawLA = false;
+    this._sawRawAccel = false;
+    this._warnedNoAccel = false;
+
+    // Adaptive accelerometer-bias tracker — the actual reason "the probe
+    // doesn't move when I move it." Even gravity-removed linear accel from
+    // the BNO085 carries a few hundredths of a m/s² of residual bias; without
+    // subtraction it integrates into a wall-clock-paced phantom drift that
+    // ZUPT then snaps away, masking real motion. We re-learn the bias every
+    // time the probe is stationary so it stays accurate as the sensor warms
+    // up and shifts.
+    this.biasX = 0;
+    this.biasY = 0;
+    this.BIAS_ALPHA = 0.01;            // EMA factor during stillness
+
+    // Mat-vs-IMU arbitration
+    this._lastMatMs = 0;
+    this.MAT_TIMEOUT_MS = 500;
+
+    // Sensitivity / drift control. Now that bias is corrected, we can run
+    // a far less aggressive damping and a tighter "motion-to-chest" mapping
+    // without the probe wandering on a still desk.
+    this.METERS_PER_NORM = 0.15;       // 15cm physical sweep ≈ full chest map
+    this.ZUPT_ACCEL_THRESHOLD = 0.06;  // m/s² above bias = "moving"
+    this.ZUPT_STILL_FRAMES = 20;       // ~0.4s at 50Hz before declaring stationary
+    this.VEL_DAMPING = 0.992;          // ~30% loss/sec at 50Hz — preserves
+                                       // sweep momentum, bias-correction handles drift
+  }
+
+  // World gravity in the probe's body frame given current pitch/roll.
+  // Used to remove gravity from raw accelerometer when firmware doesn't
+  // emit the BNO085's gravity-removed linear-accel report (LA=).
+  // Convention: Z-Y-X intrinsic, probe upright = body Z is along -world-Z.
+  _gravityInBodyFrame(pitchDeg, rollDeg) {
+    const G = 9.81;
+    const p = pitchDeg * Math.PI / 180;
+    const r = rollDeg * Math.PI / 180;
+    return {
+      x: G * Math.sin(p),
+      y: -G * Math.cos(p) * Math.sin(r),
+      z: -G * Math.cos(p) * Math.cos(r),
+    };
   }
 
   async connect() {
@@ -1201,6 +1296,24 @@ class BLEProbeManager {
   calibrateYaw() { this.yawOffset = -(this._lastRawYaw || 0); }
 
   /**
+   * Reset IMU-derived translation to a known anchor. Call after the user
+   * physically places the probe at a known landmark — otherwise the integrator
+   * starts at (0.5, 0.5) and drifts from there.
+   */
+  calibratePosition(nx = 0.5, ny = 0.5) {
+    this.posNx = nx;
+    this.posNy = ny;
+    this.velX = 0;
+    this.velY = 0;
+    this._stillSamples = 0;
+    this._lastAccelTs = null;
+    // Fresh bias estimate — keep the probe still for ~0.4s after calibration
+    // and the EMA will lock onto the resting accel signature.
+    this.biasX = 0;
+    this.biasY = 0;
+  }
+
+  /**
    * Map pressure mat grid coordinates to normalized chest position.
    * Grid is 16x16, origin top-left.
    * Chest coordinates: nx=0 (patient right) to 1 (patient left),
@@ -1212,28 +1325,138 @@ class BLEProbeManager {
     return { nx, ny };
   }
 
+  _parseLabeled(parts, prefixes) {
+    const re = new RegExp("^(" + prefixes.join("|") + ")=", "i");
+    const idx = parts.findIndex(p => re.test(p));
+    if (idx < 0 || parts.length < idx + 3) return null;
+    const head = parts[idx].split("=")[1];
+    const a = parseFloat(head);
+    const b = parseFloat(parts[idx + 1]);
+    const c = parseFloat(parts[idx + 2]);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) return null;
+    return [a, b, c];
+  }
+
   _handle(event) {
     const text = new TextDecoder().decode(event.target.value).trim();
     const parts = text.split(",").map(s => s.trim());
 
-    // BNO085BLE format (Tianyun): counter,sec,loops,transfers,calStatus,YPR=yaw,pitch,roll,Q=qr,qi,qj,qk
-    // Parts[5] starts with "YPR="
     let yaw, pitch, roll;
-    if (parts.length >= 8 && parts[5]?.startsWith("YPR=")) {
-      yaw = parseFloat(parts[5].replace("YPR=", ""));
-      pitch = parseFloat(parts[6]);
-      roll = parseFloat(parts[7]);
-    }
-    // Fallback: simple "counter,yaw,pitch,roll" format
-    else if (parts.length >= 4) {
+    const ypr = this._parseLabeled(parts, ["YPR"]);
+    if (ypr) {
+      [yaw, pitch, roll] = ypr;
+    } else if (parts.length >= 4) {
+      // Fallback: "counter,yaw,pitch,roll"
       yaw = parseFloat(parts[1]);
       pitch = parseFloat(parts[2]);
       roll = parseFloat(parts[3]);
     } else return;
 
-    if (isNaN(yaw) || isNaN(pitch) || isNaN(roll)) return;
+    if (!Number.isFinite(yaw) || !Number.isFinite(pitch) || !Number.isFinite(roll)) return;
     this._lastRawYaw = yaw;
-    this.onIMU?.(((yaw + this.yawOffset + 180) % 360) - 180, pitch, roll);
+    const adjYaw = ((yaw + this.yawOffset + 180) % 360) - 180;
+    this.onIMU?.(adjYaw, pitch, roll);
+
+    // Two acceleration sources, in order of preference:
+    //   1. LA= / LINACC= — gravity already removed by BNO085 onboard fusion.
+    //      Cleanest input for double-integration.
+    //   2. ACC= / A= — raw accelerometer (includes 9.81 m/s² of gravity).
+    //      We remove gravity in software using the current pitch/roll.
+    let ax, ay, az;
+    const la = this._parseLabeled(parts, ["LA", "LINACC"]);
+    if (la) {
+      [ax, ay, az] = la;
+      if (!this._sawLA) {
+        this._sawLA = true;
+        console.log("[BLE] Linear-accel stream detected — driving probe translation");
+      }
+    } else {
+      const raw = this._parseLabeled(parts, ["ACC", "A"]);
+      if (!raw) {
+        if (!this._warnedNoAccel) {
+          this._warnedNoAccel = true;
+          console.warn(
+            "[BLE] Probe firmware emits neither LA= nor ACC= — accelerometer " +
+            "cannot drive translation. Sample: " + text.slice(0, 120)
+          );
+        }
+        return;
+      }
+      [ax, ay, az] = raw;
+      const g = this._gravityInBodyFrame(pitch, roll);
+      ax -= g.x;
+      ay -= g.y;
+      az -= g.z;
+      if (!this._sawRawAccel) {
+        this._sawRawAccel = true;
+        console.log("[BLE] Raw accel detected — applying software gravity removal");
+      }
+    }
+
+    if (Number.isFinite(ax) && Number.isFinite(ay)) {
+      this._integrateAccel(ax, ay, az, adjYaw);
+    }
+  }
+
+  _integrateAccel(ax, ay, _az, yawDeg) {
+    const now = performance.now();
+
+    // Mat takes precedence — when a recent mat sample exists, suppress the
+    // integrator entirely so it doesn't fight the absolute reference.
+    if (now - this._lastMatMs < this.MAT_TIMEOUT_MS) {
+      this._lastAccelTs = now;
+      this.velX = 0;
+      this.velY = 0;
+      return;
+    }
+
+    if (this._lastAccelTs == null) { this._lastAccelTs = now; return; }
+    const dt = Math.min(0.1, (now - this._lastAccelTs) / 1000);
+    this._lastAccelTs = now;
+    if (dt <= 0) return;
+
+    // Bias-corrected accel: subtract the slow EMA of the at-rest signal.
+    // Bias is what makes the probe drift on a still desk — once it's gone,
+    // any honest hand motion shows up cleanly in (ax_c, ay_c).
+    const ax_c = ax - this.biasX;
+    const ay_c = ay - this.biasY;
+    const mag = Math.hypot(ax_c, ay_c);
+    this._lastAccelMag = mag;
+
+    if (mag < this.ZUPT_ACCEL_THRESHOLD) {
+      // The probe is sitting still. Snap velocity to zero (ZUPT) and
+      // re-learn bias from the raw accel — this is what keeps the integrator
+      // honest across temperature drift and orientation changes.
+      this.biasX = this.biasX * (1 - this.BIAS_ALPHA) + ax * this.BIAS_ALPHA;
+      this.biasY = this.biasY * (1 - this.BIAS_ALPHA) + ay * this.BIAS_ALPHA;
+      if (++this._stillSamples >= this.ZUPT_STILL_FRAMES) {
+        this.velX = 0;
+        this.velY = 0;
+      }
+    } else {
+      this._stillSamples = 0;
+    }
+
+    // Rotate body-frame accel into world frame using yaw only — pitch/roll
+    // tilt the probe but the chest surface itself is what defines nx/ny.
+    const yawRad = yawDeg * Math.PI / 180;
+    const cos = Math.cos(yawRad), sin = Math.sin(yawRad);
+    const wx = ax_c * cos - ay_c * sin;
+    const wy = ax_c * sin + ay_c * cos;
+
+    this.velX = (this.velX + wx * dt) * this.VEL_DAMPING;
+    this.velY = (this.velY + wy * dt) * this.VEL_DAMPING;
+
+    const newNx = Math.max(0, Math.min(1, this.posNx + (this.velX * dt) / this.METERS_PER_NORM));
+    const newNy = Math.max(0, Math.min(1, this.posNy + (this.velY * dt) / this.METERS_PER_NORM));
+    // Bounce off the chest-map edges by zeroing velocity into the wall, so
+    // the probe sticks at the boundary instead of building up unbounded vel.
+    if (newNx === 0 || newNx === 1) this.velX = 0;
+    if (newNy === 0 || newNy === 1) this.velY = 0;
+    this.posNx = newNx;
+    this.posNy = newNy;
+
+    this.onPosition?.(this.posNx, this.posNy, mag, "imu");
   }
 
   /**
@@ -1246,7 +1469,12 @@ class BLEProbeManager {
   updatePressurePosition(row, col, pressure) {
     if (pressure < 200) return; // No contact
     const { nx, ny } = this.gridToChestPosition(row, col);
-    this.onPosition?.(nx, ny, pressure / 4095);
+    this._lastMatMs = performance.now();
+    this.posNx = nx;
+    this.posNy = ny;
+    this.velX = 0;
+    this.velY = 0;
+    this.onPosition?.(nx, ny, pressure / 4095, "mat");
   }
 }
 
@@ -1365,14 +1593,62 @@ document.addEventListener("DOMContentLoaded", () => {
   const bleManager = new BLEProbeManager();
   let training = null;
 
-  // Wire free probe movement → server interpolation
-  let _probeMoveThrottle = 0;
-  probeOverlay.onProbeMove = (nx, ny, snappedZone) => {
-    // Move 3D probe to match chest position
-    if (window.probe3d) window.probe3d.setPosition(nx, ny);
+  // Probe pose → effective chest-surface scan target.
+  //
+  // Pitch and roll tilt the beam axis off-vertical; at scan depth D the beam
+  // meets the lung at D*tan(theta) away from the contact point. Normalized
+  // against a ~40cm chest, that's ~0.005 per degree for small angles. Yaw
+  // rotates which body-frame axis the tilt projects onto.
+  //
+  // The result is sent as `probe_position` so the server-side Gaussian zone
+  // blender (sigma=0.14, in `get_interpolated_frame_data`) reweights toward
+  // whichever lung field the angled beam is aimed at — the image content
+  // changes, not just the canvas transform.
+  const TILT_K = 0.005;
+
+  function computeBeamOffset(yaw, pitch, roll) {
+    const bx = roll  * TILT_K;  // probe-body lateral tilt → chest x
+    const by = pitch * TILT_K;  // probe-body fore/aft tilt → chest y
+    const yawRad = yaw * Math.PI / 180;
+    const c = Math.cos(yawRad), s = Math.sin(yawRad);
+    return { dx: bx * c - by * s, dy: bx * s + by * c };
+  }
+
+  let _probeUpdateThrottle = 0;
+  let _probeMovingTimer = null;
+  function sendProbeUpdate(immediate = false) {
+    if (!probeOverlay.probeVisible) return;
     const now = Date.now();
-    if (now - _probeMoveThrottle < 80) return; // throttle to ~12 updates/sec
-    _probeMoveThrottle = now;
+    if (!immediate && now - _probeUpdateThrottle < 80) return;
+    _probeUpdateThrottle = now;
+
+    const { dx, dy } = computeBeamOffset(probeOverlay.yaw, probeOverlay.pitch, probeOverlay.roll);
+    const effNx = Math.max(0, Math.min(1, probeOverlay.probeNx + dx));
+    const effNy = Math.max(0, Math.min(1, probeOverlay.probeNy + dy));
+    probeOverlay.setBeamTarget(effNx, effNy);
+
+    ws.send({
+      type: "probe_position",
+      nx: effNx, ny: effNy,
+      raw_nx: probeOverlay.probeNx, raw_ny: probeOverlay.probeNy,
+      yaw: probeOverlay.yaw, pitch: probeOverlay.pitch, roll: probeOverlay.roll,
+    });
+
+    // Dim the play button briefly while we're actively reframing — the server
+    // is pushing a fresh blended stack and resuming playback mid-burst looks jumpy.
+    const playBtn = document.getElementById("play-btn");
+    playBtn.disabled = true;
+    playBtn.style.opacity = "0.3";
+    clearTimeout(_probeMovingTimer);
+    _probeMovingTimer = setTimeout(() => {
+      playBtn.disabled = false;
+      playBtn.style.opacity = "1";
+    }, 400);
+  }
+
+  // Free probe drag on chest map
+  probeOverlay.onProbeMove = (nx, ny, snappedZone) => {
+    if (window.probe3d) window.probe3d.setPosition(nx, ny);
     if (snappedZone) {
       ws.send({ type: "select_zone", zone: snappedZone });
       // Auto-play on probe snap to zone
@@ -1386,7 +1662,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("freeze-overlay").classList.add("hidden");
       }
     } else {
-      ws.send({ type: "probe_position", nx, ny });
+      sendProbeUpdate();
     }
   };
 
@@ -1650,20 +1926,52 @@ document.addEventListener("DOMContentLoaded", () => {
     probeOverlay.setIMU(y, p, r);
     bmode.setProbeOrientation(y, p, r);
     if (window.probe3d) window.probe3d.setOrientation(y, p, r);
-    document.getElementById("ble-imu").textContent = `Y: ${y.toFixed(1)} P: ${p.toFixed(1)} R: ${r.toFixed(1)}`;
-    ws.send({ type: "imu_update", yaw: y, pitch: p, roll: r });
+    document.getElementById("ble-imu").textContent = `Yaw(Z): ${y.toFixed(1)}° Pitch(Y): ${p.toFixed(1)}° Roll(X): ${r.toFixed(1)}°`;
+    // Mirror onto sliders so user sees live values (sliders are read-only while BLE drives).
+    if (yawSlider) {
+      yawSlider.value = Math.round(y);
+      pitchSlider.value = Math.round(p);
+      rollSlider.value = Math.round(r);
+      document.getElementById("yaw-value").textContent = Math.round(y);
+      document.getElementById("pitch-value").textContent = Math.round(p);
+      document.getElementById("roll-value").textContent = Math.round(r);
+    }
+    sendProbeUpdate();
   };
 
-  // Pressure mat → probe position on chest diagram
-  bleManager.onPosition = (nx, ny, pressure) => {
+  // Probe position on chest diagram. Source is "mat" (absolute, drift-free)
+  // or "imu" (double-integrated linear accel — used only when mat is absent).
+  // For "imu" source, `confidence` is the current accel magnitude (m/s²),
+  // which we surface as a live readout so the user can confirm the
+  // accelerometer is actually driving translation.
+  bleManager.onPosition = (nx, ny, confidence, source) => {
     probeOverlay.setProbePosition(nx, ny);
     if (window.probe3d) window.probe3d.setPosition(nx, ny);
-    ws.send({ type: "probe_position", nx, ny });
+    const t = document.getElementById("ble-translation");
+    if (t) {
+      const tag = source === "mat" ? "mat" : "imu";
+      const mag = source === "imu" ? `${confidence.toFixed(2)} m/s²` : "—";
+      t.textContent = `Pos (${tag}): ${nx.toFixed(2)}, ${ny.toFixed(2)} | |a|: ${mag}`;
+    }
+    sendProbeUpdate();
   };
   document.getElementById("ble-connect-btn").addEventListener("click", () => { if (bleManager.connected) bleManager.disconnect(); else bleManager.connect(); });
-  document.getElementById("ble-calibrate-btn").addEventListener("click", () => bleManager.calibrateYaw());
+  const calibrateOverlay = document.getElementById("calibrate-overlay");
+  const showCalibrateOverlay = () => calibrateOverlay.classList.remove("hidden");
+  const hideCalibrateOverlay = () => calibrateOverlay.classList.add("hidden");
+  document.getElementById("ble-calibrate-btn").addEventListener("click", showCalibrateOverlay);
+  document.getElementById("calibrate-cancel-btn").addEventListener("click", hideCalibrateOverlay);
+  document.getElementById("calibrate-confirm-btn").addEventListener("click", () => {
+    bleManager.calibrateYaw();
+    bleManager.calibratePosition();  // anchor IMU integrator at chest center
+    hideCalibrateOverlay();
+  });
+  calibrateOverlay.addEventListener("click", (e) => {
+    if (e.target === calibrateOverlay) hideCalibrateOverlay();
+  });
   document.getElementById("probe-reset-btn").addEventListener("click", () => {
     probeOverlay.resetOrientation();
+    bmode.setProbeOrientation(0, 0, 0);
     if (window.probe3d) window.probe3d.resetOrientation();
     document.getElementById("yaw-slider").value = 0;
     document.getElementById("pitch-slider").value = 0;
@@ -1671,6 +1979,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("yaw-value").textContent = "0";
     document.getElementById("pitch-value").textContent = "0";
     document.getElementById("roll-value").textContent = "0";
+    sendProbeUpdate(true);
   });
 
   // Orientation sliders (manual control when BLE not connected)
@@ -1678,26 +1987,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const pitchSlider = document.getElementById("pitch-slider");
   const rollSlider = document.getElementById("roll-slider");
 
-  // Throttled orientation update to server
-  let _orientThrottle = 0;
-  let _probeMovingTimer = null;
-  function sendOrientationToServer(y, p, r) {
-    const now = Date.now();
-    if (now - _orientThrottle < 150) return; // ~6-7 updates/sec to avoid latency
-    _orientThrottle = now;
-    ws.send({ type: "imu_update", yaw: y, pitch: p, roll: r });
-    // Disable play button while actively moving
-    const playBtn = document.getElementById("play-btn");
-    playBtn.disabled = true;
-    playBtn.style.opacity = "0.3";
-    clearTimeout(_probeMovingTimer);
-    _probeMovingTimer = setTimeout(() => {
-      playBtn.disabled = false;
-      playBtn.style.opacity = "1";
-    }, 400);
-  }
-
   function onSliderInput() {
+    // Sliders are read-only mirrors while BLE drives; ignore input then.
+    if (probeOverlay.imuConnected) return;
     const y = parseFloat(yawSlider.value);
     const p = parseFloat(pitchSlider.value);
     const r = parseFloat(rollSlider.value);
@@ -1711,7 +2003,7 @@ document.addEventListener("DOMContentLoaded", () => {
     probeOverlay._dirty = true;
     bmode.setProbeOrientation(y, p, r);
     if (window.probe3d) window.probe3d.setOrientation(y, p, r);
-    sendOrientationToServer(y, p, r);
+    sendProbeUpdate();
   }
 
   yawSlider.addEventListener("input", onSliderInput);
@@ -1728,7 +2020,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("yaw-value").textContent = Math.round(y);
     document.getElementById("pitch-value").textContent = Math.round(p);
     document.getElementById("roll-value").textContent = Math.round(r);
-    sendOrientationToServer(y, p, r);
+    sendProbeUpdate();
   };
 
   // Disable sliders when BLE is active
@@ -1741,8 +2033,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const sliderPanel = document.getElementById("orientation-sliders");
     if (connected) {
       sliderPanel.classList.add("ble-active");
+      // Anchor the integrator at chest center so the probe is immediately
+      // visible and accelerometer-driven translation has a meaningful origin.
+      bleManager.calibratePosition(0.5, 0.5);
+      probeOverlay.setProbePosition(0.5, 0.5);
+      if (window.probe3d) window.probe3d.setPosition(0.5, 0.5);
+      sendProbeUpdate(true);
     } else {
       sliderPanel.classList.remove("ble-active");
+      const t = document.getElementById("ble-translation");
+      if (t) t.textContent = "Pos: -- | |a|: --";
     }
   };
 });
